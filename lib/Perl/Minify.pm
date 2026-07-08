@@ -20,7 +20,7 @@ our $ERROR = '';
 sub minify_error { return $ERROR }
 
 # Keys we actually read from the user-supplied options hashref.
-my @KNOWN_OPTS = qw(strip_comments strip_pod strip_whitespace shorten_vars wrap cache source_map optimize);
+my @KNOWN_OPTS = qw(strip_comments strip_pod strip_whitespace shorten_vars wrap cache source_map optimize keep_name);
 
 # Punctuation operators/structures where adjacent whitespace is never significant.
 my %PUNCT_OP = map { $_ => 1 } (
@@ -132,9 +132,9 @@ sub minify_sub {
         return undef;
     }
 
-    # Clone the sub and make it anonymous (in place modification)
+    # Clone the sub and optionally make it anonymous (in place modification)
     my $sub_clone = $sub->clone;
-    _make_sub_anonymous($sub_clone);
+    _make_sub_anonymous($sub_clone) unless $opts->{keep_name};
     
     # Remove the sub from its parent to make it standalone
     $sub_clone->remove if $sub_clone->parent;
@@ -188,6 +188,7 @@ sub _resolve_opts {
         cache            => 0,
         source_map       => 0,
         optimize         => 0,
+        keep_name        => 1,
     );
 
     my %out = %defaults;
@@ -1120,9 +1121,9 @@ explicitly or via C<:all>.
 
 =head2 minify_sub($code, $sub_name, \%opts?)
 
-Locates a named subroutine, re-emits it as an anonymous C<sub { }> (the
-sub name is dropped), and runs the minification pipeline on it alone.
-Returns C<undef> on parse failure or if no sub named C<$sub_name> is found.
+Locates a named subroutine, and runs the minification pipeline on it
+alone. Returns C<undef> on parse failure or if no sub named C<$sub_name>
+is found.
 
 =head1 OPTIONS
 
@@ -1134,6 +1135,7 @@ ignored silently. Defaults:
     strip_whitespace  1   collapse non-significant whitespace
     shorten_vars      0   rename lexicals to short names ($c, $d, ...)
     wrap              0   if >0, word-wrap output to <=N columns
+    keep_name         1   preserve the sub name in C<minify_sub> output
 
 =head2 shorten_vars limitations
 

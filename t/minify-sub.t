@@ -56,4 +56,9 @@ for my $line (split "\n", $r5) {
         or diag "Overlong: [$line]";
 }
 
+# 6. keep_name preserves the sub name
+my $r6 = minify_sub($code, 'color', { keep_name => 1 });
+ok defined($r6), 'minify_sub color with keep_name returns defined';
+ok $r6 =~ /^sub\s+color\s*\{/, 'color sub name preserved' or diag "got: $r6";
+
 done_testing;

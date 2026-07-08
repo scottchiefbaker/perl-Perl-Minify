@@ -1153,7 +1153,7 @@ This never breaks a string literal mid-character.
 
 =head1 AUTHOR
 
-opencode
+Scottchiefbaker - https://github.com/scottchiefbaker/
 
 =head1 LICENSE
 

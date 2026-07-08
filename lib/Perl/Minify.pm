@@ -734,8 +734,10 @@ sub _wrap {
         push @stmts, substr($text, $prev, $pos - $prev + 1);
         $prev = $pos + 1;
     }
-    my $rest = substr($text, $prev);
-    push @stmts, $rest if length($rest);
+    if ($prev < length($text)) {
+        my $rest = substr($text, $prev);
+        push @stmts, $rest if length($rest);
+    }
 
     # Pack statements into lines greedily.
     my @lines;

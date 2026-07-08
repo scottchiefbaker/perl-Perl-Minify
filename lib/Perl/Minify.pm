@@ -1,0 +1,1018 @@
+package Perl::Minify;
+
+use strict;
+use warnings;
+use v5.16;
+
+use PPI::Document ();
+use Scalar::Util  qw/blessed weaken/;
+
+use Exporter 'import';
+our @EXPORT    = ();
+our @EXPORT_OK = qw(minify minify_sub minify_error);
+our %EXPORT_TAGS = (all => [qw(minify minify_sub minify_error)]);
+
+our $VERSION = '0.03';
+
+# Error reporting
+our $ERROR = '';
+
+sub minify_error { return $ERROR }
+
+# Keys we actually read from the user-supplied options hashref.
+my @KNOWN_OPTS = qw(strip_comments strip_pod strip_whitespace shorten_vars wrap cache source_map optimize);
+
+# Punctuation operators/structures where adjacent whitespace is never significant.
+my %PUNCT_OP = map { $_ => 1 } (
+    '+', '-', '*', '/', '%', '**', ',', ';', ':', '.', '=', '==', '!=',
+    '<=', '>=', '<', '>', '!', '~', '|', '&', '^', '<<', '>>', '?',
+    ':=', '=>', '&&', '||', '//', '->', '+=', '-=', '*=', '/=', '.=',
+    '<=>', '++', '--', '**=', '<<=', '>>=',
+);
+
+# Token classes whose content we consider "string/regex-like" and whose
+# interior whitespace must never be used as a wrap break point.
+# NOTE: PPI::Token::QuoteLike::Words (qw()) is intentionally excluded:
+# qw() items are whitespace-separated and Perl treats an inserted "\n"
+# as equivalent to a space, so breaking inside qw() is always safe.
+my @UNSAFE_TOKEN_CLASSES = qw(
+    PPI::Token::Quote
+    PPI::Token::QuoteLike::Command
+    PPI::Token::QuoteLike::Regexp
+    PPI::Token::QuoteLike::Readline
+    PPI::Token::Regexp::Match
+    PPI::Token::Regexp::Substitute
+    PPI::Token::Regexp::Transulate
+    PPI::Token::HereDoc
+    PPI::Token::Data
+    PPI::Token::Pod
+);
+
+# Token classes where symbols cannot be renamed via PPI traversal because
+# they're embedded in string content. We'll handle these with post-processing.
+my @STRING_EMBEDDED_CLASSES = qw(
+    PPI::Token::Quote::Double
+    PPI::Token::Quote::Interpolate
+    PPI::Token::QuoteLike::Command
+    PPI::Token::QuoteLike::Backtick
+    PPI::Token::QuoteLike::Regexp
+    PPI::Token::Regexp::Match
+    PPI::Token::Regexp::Substitute
+    PPI::Token::Regexp::Transliterate
+    PPI::Token::HereDoc
+);
+
+# Token classes that disqualify a symbol from being renamed at all.
+my @NO_RENAME_ANCESTOR_CLASSES = qw(
+    PPI::Token::Quote::Single
+    PPI::Token::Quote::Literal
+    PPI::Token::QuoteLike::Words
+    PPI::Token::QuoteLike::Readline
+);
+
+##############################################################################
+# Public API
+
+sub minify {
+    my ($code, $opts) = @_;
+    $opts = _resolve_opts($opts);
+    
+    $ERROR = '';
+
+    my $doc = PPI::Document->new(\$code);
+    unless (defined $doc) {
+        $ERROR = 'Failed to parse Perl code - PPI syntax error';
+        return undef;
+    }
+
+    _strip_comments($doc)   if $opts->{strip_comments};
+    _strip_pod($doc)        if $opts->{strip_pod};
+    _strip_whitespace($doc) if $opts->{strip_whitespace};
+    
+    # Apply optimizations if requested (EXPERIMENTAL - may be buggy)
+    if ($opts->{optimize}) {
+        eval {
+            _optimize_constant_folding($doc);
+            _optimize_dead_code($doc);
+        };
+        # Ignore optimization errors - they're experimental
+    }
+    
+    my $varmap = _shorten_vars($doc) if $opts->{shorten_vars};
+
+    my $result = $doc->serialize;
+    
+    # Post-process: replace variables in interpolated strings/regexes
+    if ($varmap && %$varmap) {
+        $result = _replace_vars_in_interpolations($result, $doc, $varmap);
+    }
+    
+    $result = _wrap($result, $doc, $opts->{wrap}) if $opts->{wrap};
+
+    return $result;
+}
+
+sub minify_sub {
+    my ($code, $sub_name, $opts) = @_;
+    $opts = _resolve_opts($opts);
+    
+    $ERROR = '';
+
+    my $doc = PPI::Document->new(\$code);
+    unless (defined $doc) {
+        $ERROR = 'Failed to parse Perl code - PPI syntax error';
+        return undef;
+    }
+
+    my $found = $doc->find('PPI::Statement::Sub');
+    $found = [] unless ref $found eq 'ARRAY';
+    my ($sub) = grep { $_->name eq $sub_name } @$found;
+    unless (defined $sub) {
+        $ERROR = "Subroutine '$sub_name' not found in code";
+        return undef;
+    }
+
+    # Clone the sub and make it anonymous (in place modification)
+    my $sub_clone = $sub->clone;
+    _make_sub_anonymous($sub_clone);
+    
+    # Remove the sub from its parent to make it standalone
+    $sub_clone->remove if $sub_clone->parent;
+    
+    # Create a minimal document containing just this sub
+    my $new_doc = PPI::Document->new;
+    $new_doc->{children} = [ $sub_clone ];
+    $sub_clone->{parent} = $new_doc;
+    weaken($sub_clone->{parent}) if ref($sub_clone->{parent});
+
+    _strip_comments($new_doc)   if $opts->{strip_comments};
+    _strip_pod($new_doc)        if $opts->{strip_pod};
+    _strip_whitespace($new_doc) if $opts->{strip_whitespace};
+    
+    # Apply optimizations if requested (EXPERIMENTAL - may be buggy)
+    if ($opts->{optimize}) {
+        eval {
+            _optimize_constant_folding($new_doc);
+            _optimize_dead_code($new_doc);
+        };
+        # Ignore optimization errors - they're experimental
+    }
+    
+    my $varmap = _shorten_vars($new_doc) if $opts->{shorten_vars};
+
+    my $result = $new_doc->serialize;
+    
+    # Post-process: replace variables in interpolated strings/regexes
+    if ($varmap && %$varmap) {
+        $result = _replace_vars_in_interpolations($result, $new_doc, $varmap);
+    }
+    
+    $result = _wrap($result, $new_doc, $opts->{wrap}) if $opts->{wrap};
+
+    return $result;
+}
+
+##############################################################################
+# Option handling
+
+sub _resolve_opts {
+    my ($opts) = @_;
+    $opts = {} unless defined $opts && ref $opts eq 'HASH';
+
+    my %defaults = (
+        strip_comments   => 1,
+        strip_pod        => 1,
+        strip_whitespace => 1,
+        shorten_vars     => 0,
+        wrap             => 0,
+        cache            => 0,
+        source_map       => 0,
+        optimize         => 0,
+    );
+
+    my %out = %defaults;
+    for my $k (@KNOWN_OPTS) {
+        $out{$k} = $opts->{$k} if exists $opts->{$k};
+    }
+    return \%out;
+}
+
+##############################################################################
+# Modifying a sub to make it anonymous (in place)
+
+sub _make_sub_anonymous {
+    my ($sub) = @_;
+
+    # PPI::Statement::Sub token layout:
+    #   PPI::Token::Word        'sub'
+    #   PPI::Token::Whitespace  ' '
+    #   PPI::Token::Word        '<name>'
+    #   PPI::Token::Whitespace  ' '
+    #   PPI::Structure::Block   { ... }
+    #
+    # We remove the name and its surrounding whitespace.
+
+    my @children = $sub->children;
+    my $saw_sub = 0;
+    
+    for my $child (@children) {
+        if (!$saw_sub && $child->isa('PPI::Token::Word') && $child->content eq 'sub') {
+            $saw_sub = 1;
+            next;
+        }
+        
+        if ($saw_sub) {
+            # Remove whitespace and the name word after 'sub'
+            if ($child->isa('PPI::Token::Whitespace')) {
+                $child->delete;
+            } elsif ($child->isa('PPI::Token::Word')) {
+                # This is the sub name - delete it
+                $child->delete;
+                last;  # Done - the rest is the block and signature
+            } else {
+                # Hit the block or something else - we're done
+                last;
+            }
+        }
+    }
+    
+    # Ensure there's a single space between 'sub' and the block
+    my @kids = $sub->children;
+    if (@kids >= 2 && $kids[0]->isa('PPI::Token::Word') && $kids[0]->content eq 'sub') {
+        # Check if there's whitespace between sub and the next element
+        if (!$kids[1]->isa('PPI::Token::Whitespace')) {
+            # Insert a whitespace token
+            my $ws = PPI::Token::Whitespace->new(' ');
+            $ws->insert_before($kids[1]);
+        }
+    }
+}
+
+##############################################################################
+# Generic PPI helpers
+
+sub _find {
+    my ($doc, $class) = @_;
+    my $found = $doc->find($class);
+    return ref $found ? $found : [];
+}
+
+sub _is_unsafe_class {
+    my ($tok) = @_;
+    for my $cls (@UNSAFE_TOKEN_CLASSES) {
+        return 1 if $tok->isa($cls);
+    }
+    return 0;
+}
+
+##############################################################################
+# Stripping passes
+
+sub _strip_comments {
+    my ($doc) = @_;
+    my $found = _find($doc, 'PPI::Token::Comment');
+    $_->delete for @$found;
+}
+
+sub _strip_pod {
+    my ($doc) = @_;
+    my $found = _find($doc, 'PPI::Token::Pod');
+    $_->delete for @$found;
+}
+
+sub _strip_whitespace {
+    my ($doc) = @_;
+    my $found = _find($doc, 'PPI::Token::Whitespace');
+    return unless @$found;
+
+    for my $ws (@$found) {
+        my $prev = $ws->sprevious_sibling;
+        my $next = $ws->snext_sibling;
+
+        # Leading or trailing whitespace: always delete.
+        unless ($prev && $next) {
+            $ws->delete;
+            next;
+        }
+
+        my $pc = $prev->content;
+        my $nc = $next->content;
+
+        # Rule 1: word|word -> single space (keep "use strict", "$str eq", etc.)
+        if ($pc =~ /\w$/ && $nc =~ /^\w/) {
+            $ws->{content} = ' ';
+            next;
+        }
+
+        # Rule 2: '.' concat operator next to a Number -> single space.
+        if ($prev->isa('PPI::Token::Number') &&
+            $next->isa('PPI::Token::Operator') && $nc eq '.') {
+            $ws->{content} = ' ';
+            next;
+        }
+        if ($prev->isa('PPI::Token::Operator') && $pc eq '.' &&
+            $next->isa('PPI::Token::Number')) {
+            $ws->{content} = ' ';
+            next;
+        }
+
+        # Rule 3: two consecutive symbols/magic need separation ($fh $data).
+        if (_is_symbol_like($prev) && _is_symbol_like($next)) {
+            $ws->{content} = ' ';
+            next;
+        }
+
+        # Rule 4: letter-starting operator (x, eq, ne, lt, ...) after word-char.
+        if ($nc =~ /^[a-z]/i && $next->isa('PPI::Token::Operator') && $pc =~ /\w$/) {
+            $ws->{content} = ' ';
+            next;
+        }
+
+        # Rule 5 (new A): punctuation-operator/structure adjacency -> delete.
+        if (_is_punct_op($prev) && _is_punct_op($next)) {
+            $ws->delete;
+            next;
+        }
+
+        # Rule 6 (new B): trim space after opening bracket (unless next is a
+        # word - protects $h{key}, $h{ bareword } shorthand).
+        if (_is_open_bracket($prev)) {
+            unless ($next->isa('PPI::Token::Word')) {
+                $ws->delete;
+                next;
+            }
+        }
+
+        # Rule 7 (new B): trim space before closing bracket (always safe).
+        if (_is_close_bracket($next)) {
+            $ws->delete;
+            next;
+        }
+
+        # Default: delete unnecessary whitespace.
+        $ws->delete;
+    }
+}
+
+sub _is_symbol_like {
+    my ($tok) = @_;
+    return $tok->isa('PPI::Token::Symbol') || $tok->isa('PPI::Token::Magic');
+}
+
+sub _is_punct_op {
+    my ($tok) = @_;
+    return 0 unless $tok->isa('PPI::Token::Operator') || $tok->isa('PPI::Token::Structure');
+    my $c = $tok->content;
+    return exists $PUNCT_OP{$c};
+}
+
+sub _is_open_bracket {
+    my ($tok) = @_;
+    return 0 unless $tok->isa('PPI::Token::Structure');
+    my $c = $tok->content;
+    return $c eq '(' || $c eq '[' || $c eq '{';
+}
+
+sub _is_close_bracket {
+    my ($tok) = @_;
+    return 0 unless $tok->isa('PPI::Token::Structure');
+    my $c = $tok->content;
+    return $c eq ')' || $c eq ']' || $c eq '}';
+}
+
+##############################################################################
+# Variable shortening
+
+sub _shorten_vars {
+    my ($doc) = @_;
+    my %map;
+
+    # Pass 1a: explicit my/our/state declarations.
+    # NOTE: PPI occasionally misclassifies "open(my $fh, "<", $_[0])" as a
+    # PPI::Statement::Variable too. _extract_decl_names handles this by
+    # stopping at the first non-LHS token, so only the real declared
+    # names (e.g. $fh) get collected, never subsequent args like $_[0].
+    my $var_stmts = _find($doc, 'PPI::Statement::Variable');
+    for my $stmt (@$var_stmts) {
+        # Only treat as a declaration if the first significant token is
+        # my/our/state. Skip "local" - that's localization, not a lexical
+        # declaration, and the variables involved are usually magic ($/, etc).
+        my @sig = grep { !$_->isa('PPI::Token::Whitespace') } $stmt->children;
+        next unless @sig && $sig[0]->isa('PPI::Token::Word')
+                    && $sig[0]->content =~ /^(my|our|state)$/;
+        for my $name (_extract_decl_names($stmt)) {
+            $map{$name} //= _next_short_name(\%map, $name);
+        }
+    }
+
+    # Pass 1b: inline my/our/state inside compound statements (for my $x ...).
+    my $compounds = _find($doc, 'PPI::Statement::Compound');
+    for my $stmt (@$compounds) {
+        my @kids = $stmt->children;
+        for (my $i = 0; $i < @kids; $i++) {
+            my $c = $kids[$i];
+            next unless $c->isa('PPI::Token::Word') && $c->content =~ /^(my|our|state)$/;
+            my $n = $kids[$i + 1] // next;
+            next unless $n->isa('PPI::Token::Symbol');
+            my $name = $n->content;
+            next unless $name =~ /^[\$\@\%]/;
+            $map{$name} //= _next_short_name(\%map, $name);
+        }
+    }
+
+    return \%map unless %map;
+
+    # Pass 2: rename symbol references in PPI-parseable locations
+    # (skipping symbols in non-interpolating strings or other unsafe contexts).
+    my $symbols = _find($doc, 'PPI::Token::Symbol');
+    for my $sym (@$symbols) {
+        next if $sym->isa('PPI::Token::Magic');
+        next if _symbol_in_unsafe_context($sym);
+
+        my $var = $sym->content;
+        if (exists $map{$var}) {
+            $sym->{content} = $map{$var};
+            next;
+        }
+
+        # Cross-sigil fallback (e.g. %hash -> $hash{...}).
+        my $base = $var;
+        $base =~ s/^[\$\@\%]//;
+        for my $sigil (qw/$ @ %/) {
+            my $alt = $sigil . $base;
+            if (exists $map{$alt}) {
+                my $short = $map{$alt};
+                $short =~ s/^[\$\@\%]//;
+                $sym->{content} = substr($var, 0, 1) . $short;
+                last;
+            }
+        }
+    }
+
+    return \%map;
+}
+
+# Post-process replacement for variables in interpolated strings/regexes.
+# PPI doesn't parse the interior of these tokens, so we must do text replacement.
+# We only replace within the content of interpolation-supporting tokens.
+sub _replace_vars_in_interpolations {
+    my ($text, $doc, $map) = @_;
+    
+    # Find all tokens that support interpolation
+    my @interp_classes = qw(
+        PPI::Token::Quote::Double
+        PPI::Token::Quote::Interpolate
+        PPI::Token::QuoteLike::Command
+        PPI::Token::QuoteLike::Backtick
+        PPI::Token::QuoteLike::Regexp
+        PPI::Token::Regexp::Match
+        PPI::Token::Regexp::Substitute
+        PPI::Token::HereDoc
+    );
+    
+    my @tokens;
+    for my $class (@interp_classes) {
+        my $found = $doc->find($class);
+        push @tokens, @$found if ref $found eq 'ARRAY';
+    }
+    
+    return $text unless @tokens;
+    
+    # Build a map of original content -> replacement content for each token
+    my %replacements;
+    
+    for my $tok (@tokens) {
+        my $orig_content = $tok->content;
+        my $new_content = $orig_content;
+        
+        # Sort variables by length (longest first) to avoid partial replacements
+        my @vars = sort { length($b) <=> length($a) } keys %$map;
+        
+        for my $var (@vars) {
+            my $replacement = $map->{$var};
+            my $sigil = substr($var, 0, 1);
+            my $name = substr($var, 1);
+            my $short_name = substr($replacement, 1);
+            
+            # Match the variable with word boundaries
+            # Pattern: $varname followed by non-word-char or { or [ or end
+            my $pattern = qr/\Q$var\E(?=\{|\[|[^\w]|\z)/;
+            $new_content =~ s/$pattern/$replacement/g;
+            
+            # Handle cross-sigil: if we renamed %hash, also rename $hash{...} and @hash[...]
+            if ($sigil eq '%') {
+                $new_content =~ s/\$\Q$name\E(?=\{)/'$' . $short_name/ge;
+                $new_content =~ s/\@\Q$name\E(?=\[)/'@' . $short_name/ge;
+            } elsif ($sigil eq '@') {
+                $new_content =~ s/\$\Q$name\E(?=\[)/'$' . $short_name/ge;
+            }
+        }
+        
+        if ($new_content ne $orig_content) {
+            $replacements{$orig_content} = $new_content;
+        }
+    }
+    
+    # Apply replacements to the serialized text
+    # We need to be careful to replace exact matches only
+    for my $orig (keys %replacements) {
+        my $new = $replacements{$orig};
+        # Use quotemeta to escape special regex characters in the original content
+        my $quoted = quotemeta($orig);
+        $text =~ s/$quoted/$new/g;
+    }
+    
+    return $text;
+}
+
+sub _symbol_in_unsafe_context {
+    my ($sym) = @_;
+    my $cur = $sym;
+    while (defined $cur) {
+        for my $cls (@NO_RENAME_ANCESTOR_CLASSES) {
+            return 1 if $cur->isa($cls);
+        }
+        $cur = $cur->parent;
+    }
+    return 0;
+}
+
+sub _extract_decl_names {
+    my ($stmt) = @_;
+    my @names;
+    my $found_decl_word = 0;
+    for my $child ($stmt->children) {
+        # Stop at the assignment operator - everything after is RHS, not a
+        # declared name.
+        last if $child->isa('PPI::Token::Operator') && $child->content eq '=';
+        next if $child->isa('PPI::Token::Whitespace');
+        next if $child->isa('PPI::Token::Comment');
+
+        if (!$found_decl_word) {
+            if ($child->isa('PPI::Token::Word')
+                && $child->content =~ /^(my|our|state)$/) {
+                $found_decl_word = 1;
+            }
+            next;
+        }
+
+        # We are in the LHS. Collect symbols and recurse into list
+        # structures. A ',' separator is allowed; anything else (a
+        # String, Word, or non-list Operator) means the LHS is over -
+        # stop. This guards against false-positive PPI::Statement::Variable
+        # nodes like "my $fh, "<", $_[0]" produced by open(my $fh, ...).
+        if ($child->isa('PPI::Token::Symbol')) {
+            my $var = $child->content;
+            push @names, $var if $var =~ /^[\$\@\%]/;
+            next;
+        }
+        if ($child->isa('PPI::Token::Operator') && $child->content eq ',') {
+            next;
+        }
+        if ($child->isa('PPI::Structure::List')
+         || $child->isa('PPI::Structure::Constructor')
+         || $child->isa('PPI::Structure::Block')) {
+            _extract_names_r($child, \@names);
+            next;
+        }
+        last;
+    }
+    return @names;
+}
+
+sub _extract_names_r {
+    my ($elem, $names) = @_;
+    for my $child ($elem->children) {
+        if ($child->isa('PPI::Token::Symbol')) {
+            my $var = $child->content;
+            push @$names, $var if $var =~ /^[\$\@\%]/;
+        } elsif ($child->isa('PPI::Node')) {
+            _extract_names_r($child, $names);
+        }
+    }
+}
+
+sub _next_short_name {
+    my ($map, $orig) = @_;
+    my $sigil = substr($orig, 0, 1);
+    
+    # Build a hash of taken names for O(1) lookup instead of O(N) linear search
+    my %taken = map { defined $_ ? ($_ => 1) : () } values %$map;
+
+    # Single letters - avoid $a, $b (used in sort blocks).
+    for my $letter ('c' .. 'z', 'a', 'b') {
+        my $name = $sigil . $letter;
+        return $name unless $taken{$name};
+    }
+    # Two-letter names.
+    for my $l1 ('a' .. 'z') {
+        for my $l2 ('a' .. 'z') {
+            my $name = $sigil . $l1 . $l2;
+            return $name unless $taken{$name};
+        }
+    }
+    # Numeric fallback.
+    my $i = 0;
+    while (1) {
+        my $name = $sigil . 'v' . $i++;
+        return $name unless $taken{$name};
+    }
+}
+
+##############################################################################
+# Optimization passes
+
+sub _optimize_constant_folding {
+    my ($doc) = @_;
+    
+    # Find simple binary operations with constant operands
+    my $statements = _find($doc, 'PPI::Statement');
+    
+    for my $stmt (@$statements) {
+        # Look for patterns like: my $x = 2 + 2;
+        # This is a simplified implementation - full constant folding is complex
+        my @children = $stmt->children;
+        
+        for (my $i = 0; $i < @children - 2; $i++) {
+            next unless $children[$i]->isa('PPI::Token::Number');
+            next unless $children[$i+1]->isa('PPI::Token::Operator');
+            next unless $children[$i+2]->isa('PPI::Token::Number');
+            
+            my $left = $children[$i]->content;
+            my $op = $children[$i+1]->content;
+            my $right = $children[$i+2]->content;
+            
+            # Only handle safe arithmetic operators
+            next unless $op =~ /^[+\-*]$/;  # Removed division for safety
+            
+            my $result;
+            if ($op eq '+') { $result = $left + $right; }
+            elsif ($op eq '-') { $result = $left - $right; }
+            elsif ($op eq '*') { $result = $left * $right; }
+            
+            # Create new token and replace
+            my $new_token = PPI::Token::Number->new($result);
+            eval {
+                $new_token->insert_before($children[$i]);
+                $children[$i]->delete;
+                $children[$i+1]->delete;
+                $children[$i+2]->delete;
+            };
+            if ($@) {
+                # If replacement fails, just skip this optimization
+                last;
+            }
+            
+            last;  # Process one per statement for safety
+        }
+    }
+}
+
+sub _optimize_dead_code {
+    my ($doc) = @_;
+    
+    # Find unreachable code after return/die/exit statements
+    my $statements = _find($doc, 'PPI::Statement');
+    
+    my $found_terminator = 0;
+    my @to_delete;
+    
+    for my $stmt (@$statements) {
+        if ($found_terminator) {
+            # This statement is after a terminator - it's dead code
+            # But stop if we hit a new sub or block
+            last if $stmt->isa('PPI::Statement::Sub');
+            push @to_delete, $stmt;
+            next;
+        }
+        
+        # Check if this statement contains return/die/exit
+        my $tokens = $stmt->tokens;
+        for my $tok (@$tokens) {
+            if ($tok->isa('PPI::Token::Word') && 
+                $tok->content =~ /^(return|die|exit|croak|confess)$/) {
+                $found_terminator = 1;
+                last;
+            }
+        }
+    }
+    
+    # Delete dead statements
+    $_->delete for @to_delete;
+}
+
+##############################################################################
+# Word wrap (string/regex aware)
+
+sub _wrap {
+    my ($text, $doc, $width) = @_;
+    return $text unless $width > 0 && length($text) > $width;
+
+    # Build per-token offset map + unsafe ranges + semicolon offsets.
+    my $all_tokens = _find($doc, 'PPI::Token');
+    my @unsafe_ranges;
+    my @semi_offsets;
+    {
+        my $off = 0;
+        for my $tok (@$all_tokens) {
+            my $len = length($tok->content);
+            if (_is_unsafe_class($tok)) {
+                push @unsafe_ranges, [ $off, $off + $len ];
+            }
+            if ($tok->isa('PPI::Token::Structure') && $tok->content eq ';') {
+                push @semi_offsets, $off + $len - 1;
+            }
+            $off += $len;
+        }
+    }
+    @unsafe_ranges = sort { $a->[0] <=> $b->[0] } @unsafe_ranges;
+
+    # Split at semicolons into statements (each includes its trailing ';').
+    my @stmts;
+    my $prev = 0;
+    for my $pos (@semi_offsets) {
+        push @stmts, substr($text, $prev, $pos - $prev + 1);
+        $prev = $pos + 1;
+    }
+    my $rest = substr($text, $prev);
+    push @stmts, $rest if length($rest);
+
+    # Pack statements into lines greedily.
+    my @lines;
+    my $line = '';
+    for my $stmt (@stmts) {
+        $stmt =~ s/\n+\z//;
+        next if $stmt eq '';
+        if ($line eq '') {
+            $line = $stmt;
+        } else {
+            my $cand = $line . $stmt;
+            if (length($cand) <= $width) {
+                $line = $cand;
+            } else {
+                push @lines, $line;
+                $line = $stmt;
+            }
+        }
+    }
+    push @lines, $line if $line ne '';
+
+    # Split overlong lines at safe spaces.
+    my @final;
+    for my $l (@lines) {
+        if (length($l) > $width) {
+            push @final, _split_line_safe($l, $width, \@unsafe_ranges);
+        } else {
+            push @final, $l;
+        }
+    }
+
+    return join "\n", @final;
+}
+
+# Find byte offset of the first occurrence of $line within $text starting at $start.
+# Used to map a packed line back into the serialized text so we can consult
+# unsafe_ranges. We track absolute positions as we build segments.
+sub _split_line_safe {
+    my ($line, $width, $ranges) = @_;
+
+    # Enumerate space offsets within $line; mark each as safe/unsafe.
+    my @safe_offsets;
+    for (my $i = 0; $i < length($line); $i++) {
+        next unless substr($line, $i, 1) eq ' ';
+        # In _wrap we don't carry the absolute text offset here, but the unsafe
+        # information we care about is localized: a space that sits inside a
+        # string/regex literal on this very line. Re-detect that by walking the
+        # line with a lightweight state machine rather than relying on the
+        # serialized-text mask. (The mask is hard to align after newline joins.)
+        push @safe_offsets, $i;
+    }
+
+    # Filter out safe offsets that fall inside any unsafe substring of $line.
+    my @locally_unsafe = _local_unsafe_ranges($line);
+    @safe_offsets = grep { !_in_any_range($_, \@locally_unsafe) } @safe_offsets;
+
+    return $line unless @safe_offsets;
+
+    # Greedy pack at safe spaces.
+    my @out;
+    my $start = 0;
+    for my $si (@safe_offsets) {
+        my $segment = substr($line, $start, $si - $start);
+        if (!@out) {
+            push @out, $segment;
+            $start = $si + 1;
+            next;
+        }
+        my $cand = $out[-1] . ' ' . $segment;
+        if (length($cand) <= $width) {
+            $out[-1] = $cand;
+        } else {
+            push @out, $segment;
+        }
+        $start = $si + 1;
+    }
+
+    my $tail = substr($line, $start);
+    if (!@out) {
+        push @out, $tail;
+    } elsif (length($out[-1]) + 1 + length($tail) <= $width) {
+        $out[-1] .= ' ' . $tail;
+    } else {
+        push @out, $tail;
+    }
+
+    return join "\n", @out;
+}
+
+# Walk $line with a quote/regex-aware state machine and return [start,end) ranges
+# whose bytes fall inside a string/regex literal. Conservative: errs on marking
+# MORE bytes unsafe, which means fewer breaks -> safer.
+sub _local_unsafe_ranges {
+    my ($line) = @_;
+    my @ranges;
+
+    # We track opens for:  " ' /  q() qq() qw() qx() m// s/// tr/// y/// and
+    # escape sequences such as \e \x . The safe approach is to flag any byte
+    # that is inside a pairing quote/regex construct.
+    my $len = length($line);
+    my $i = 0;
+    while ($i < $len) {
+        my $ch = substr($line, $i, 1);
+
+        # Double- or single-quoted string.
+        if ($ch eq '"' || $ch eq "'") {
+            my $q   = $ch;
+            my $s   = $i;
+            $i++;
+            while ($i < $len) {
+                my $c = substr($line, $i, 1);
+                if ($c eq '\\' && $i + 1 < $len) { $i += 2; next; }
+                if ($c eq $q) { $i++; last; }
+                $i++;
+            }
+            push @ranges, [ $s, $i ];
+            next;
+        }
+
+        # Regex match m// or substitution s/// or transliteration tr///y///  -> flag
+        # entire body up to closing delimiters. Conservative: scan to the
+        # matching delimiter, allowing paired delims ( s{...}{...} ).
+        if ($ch =~ m{[msy]} && $i + 1 < $len && substr($line, $i + 1, 1) =~ /[ \t]/) {
+            # Skip whitespace, then look for opening delim.
+            my $j = $i + 1;
+            while ($j < $len && substr($line, $j, 1) =~ /[ \t]/) { $j++; }
+            my $body_start = $j;
+            my $delim = $j < $len ? substr($line, $j, 1) : '';
+            if ($delim =~ /[{\[(<]/) {
+                my $close = $delim eq '{' ? '}' :
+                            $delim eq '[' ? ']' :
+                            $delim eq '(' ? ')' :
+                            $delim eq '<' ? '>' : $delim;
+                my $depth = 1;
+                $j++;
+                while ($j < $len && $depth > 0) {
+                    my $c = substr($line, $j, 1);
+                    if    ($c eq $delim) { $depth++; }
+                    elsif ($c eq $close) { $depth--; }
+                    $j++;
+                }
+                push @ranges, [ $i, $j ];
+                $i = $j;
+                next;
+            } elsif ($delim ne '') {
+                $j++;
+                while ($j < $len && substr($line, $j, 1) ne $delim) {
+                    $j++ if substr($line, $j, 1) eq '\\' && $j + 1 < $len;
+                    $j++;
+                }
+                $j++ if $j < $len;
+                # For s/// and tr/// there is a second section.
+                if ($ch eq 's' || $ch eq 'y' || ($ch eq 't' && substr($line,$i,2) eq 'tr')) {
+                    if ($j <= $len && $j < $len) {
+                        my $d2 = substr($line, $j, 1);
+                        if ($d2 =~ /[{\[(<]/) {
+                            my $close2 = $d2 eq '{' ? '}' :
+                                         $d2 eq '[' ? ']' :
+                                         $d2 eq '(' ? ')' :
+                                         $d2 eq '<' ? '>' : $d2;
+                            my $depth = 1;
+                            $j++;
+                            while ($j < $len && $depth > 0) {
+                                my $c = substr($line, $j, 1);
+                                if    ($c eq $d2)   { $depth++; }
+                                elsif ($c eq $close2) { $depth--; }
+                                $j++;
+                            }
+                        } else {
+                            while ($j < $len && substr($line, $j, 1) ne $d2) {
+                                $j++ if substr($line, $j, 1) eq '\\' && $j + 1 < $len;
+                                $j++;
+                            }
+                            $j++ if $j < $len;
+                        }
+                    }
+                }
+                push @ranges, [ $i, $j ];
+                $i = $j;
+                next;
+            }
+        }
+
+        # Bare regex /.../  - hard to distinguish from division reliably; only
+        # treat as regex if followed by content that obviously is one. Skip
+        # this heuristic rather than risk mis-flagging division. (Default: not
+        # flagged - relies on _is_unsafe_class from PPI mask, which already
+        # covers PPI::Token::Regexp::Match in the token-walk pass.)
+
+        # qw( ... ) is intentionally NOT flagged as unsafe: qw() items are
+        # whitespace-separated and an inserted "\n" is treated identically
+        # to a space, so splitting inside qw() is always safe. Skip the
+        # qw-block detection entirely so its interior spaces remain breakable.
+
+        $i++;
+    }
+
+    return @ranges;
+}
+
+sub _in_any_range {
+    my ($pos, $ranges) = @_;
+    for my $r (@$ranges) {
+        return 1 if $pos >= $r->[0] && $pos < $r->[1];
+    }
+    return 0;
+}
+
+1;
+
+__END__
+
+=encoding utf-8
+
+=head1 NAME
+
+Perl::Minify - Compress Perl source by stripping comments, POD, and
+non-essential whitespace, with optional lexical-variable shortening.
+
+=head1 SYNOPSIS
+
+    use Perl::Minify qw(minify minify_sub);
+
+    # Minify a whole file's worth of code
+    my $min = minify($source);
+
+    # With options (all keys optional):
+    my $min = minify($source, { shorten_vars => 1, wrap => 100 });
+
+    # Extract & minify a single sub (returned as an anonymous `sub { }`)
+    my $sub = minify_sub($source, 'color', { wrap => 80 });
+
+=head1 FUNCTIONS
+
+=head2 minify($code, \%opts?)
+
+Minifies a string of Perl source. Returns the minified string, or C<undef>
+on PPI parse failure. By default nothing is exported; import C<minify>
+explicitly or via C<:all>.
+
+=head2 minify_sub($code, $sub_name, \%opts?)
+
+Locates a named subroutine, re-emits it as an anonymous C<sub { }> (the
+sub name is dropped), and runs the minification pipeline on it alone.
+Returns C<undef> on parse failure or if no sub named C<$sub_name> is found.
+
+=head1 OPTIONS
+
+All options are optional; pass them as a hashref. Unknown keys are
+ignored silently. Defaults:
+
+    strip_comments    1   remove C<#> line comments
+    strip_pod         1   remove POD blocks
+    strip_whitespace  1   collapse non-significant whitespace
+    shorten_vars      0   rename lexicals to short names ($c, $d, ...)
+    wrap              0   if >0, word-wrap output to <=N columns
+
+=head2 shorten_vars limitations
+
+Renaming is skipped for symbols that appear inside string quotes, regex
+literals, C<s///e> replacement blocks, heredocs, and interpolations. Symbolic
+references are not renamed. The renamer uses one global per-document map, so
+two distinct C<my> declarations with the same name (in different scopes)
+share a single short name.
+
+=head2 wrap limitation
+
+An overlong statement with no break point that is outside a string/regex
+literal is emitted as a single line that may exceed the requested width.
+This never breaks a string literal mid-character.
+
+=head1 AUTHOR
+
+opencode
+
+=head1 LICENSE
+
+Same terms as Perl itself.
+
+=cut

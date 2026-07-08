@@ -1,0 +1,17 @@
+AGENTS.md
+CHANGELOG.md
+MANIFEST
+Makefile.PL
+bench.pl
+color.pl
+example.pl
+lib/Perl/Minify.pm
+t/00-basic.t
+t/edge.t
+t/error-reporting.t
+t/integration-compile.t
+t/minify-opts.t
+t/minify-sub.t
+t/optimize.t
+t/shorten-vars.t
+t/wrap.t

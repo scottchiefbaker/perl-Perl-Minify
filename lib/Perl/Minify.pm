@@ -1108,7 +1108,7 @@ non-essential whitespace, with optional lexical-variable shortening.
     # With options (all keys optional):
     my $min = minify($source, { shorten_vars => 1, wrap => 100 });
 
-    # Extract & minify a single sub (returned as an anonymous `sub { }`)
+    # Extract & minify a single sub
     my $sub = minify_sub($source, 'color', { wrap => 80 });
 
 =head1 FUNCTIONS

@@ -76,7 +76,7 @@ my @NO_RENAME_ANCESTOR_CLASSES = qw(
 sub minify {
     my ($code, $opts) = @_;
     $opts = _resolve_opts($opts);
-    
+
     $ERROR = '';
 
     my $doc = PPI::Document->new(\$code);
@@ -88,7 +88,7 @@ sub minify {
     _strip_comments($doc)   if $opts->{strip_comments};
     _strip_pod($doc)        if $opts->{strip_pod};
     _strip_whitespace($doc) if $opts->{strip_whitespace};
-    
+
     # Apply optimizations if requested (EXPERIMENTAL - may be buggy)
     if ($opts->{optimize}) {
         eval {
@@ -97,16 +97,16 @@ sub minify {
         };
         # Ignore optimization errors - they're experimental
     }
-    
+
     my $varmap = _shorten_vars($doc) if $opts->{shorten_vars};
 
     my $result = $doc->serialize;
-    
+
     # Post-process: replace variables in interpolated strings/regexes
     if ($varmap && %$varmap) {
         $result = _replace_vars_in_interpolations($result, $doc, $varmap);
     }
-    
+
     $result = _wrap($result, $doc, $opts->{wrap}) if $opts->{wrap};
 
     return $result;
@@ -115,7 +115,7 @@ sub minify {
 sub minify_sub {
     my ($code, $sub_name, $opts) = @_;
     $opts = _resolve_opts($opts);
-    
+
     $ERROR = '';
 
     my $doc = PPI::Document->new(\$code);
@@ -135,10 +135,10 @@ sub minify_sub {
     # Clone the sub and optionally make it anonymous (in place modification)
     my $sub_clone = $sub->clone;
     _make_sub_anonymous($sub_clone) unless $opts->{keep_name};
-    
+
     # Remove the sub from its parent to make it standalone
     $sub_clone->remove if $sub_clone->parent;
-    
+
     # Create a minimal document containing just this sub
     my $new_doc = PPI::Document->new;
     $new_doc->{children} = [ $sub_clone ];
@@ -148,7 +148,7 @@ sub minify_sub {
     _strip_comments($new_doc)   if $opts->{strip_comments};
     _strip_pod($new_doc)        if $opts->{strip_pod};
     _strip_whitespace($new_doc) if $opts->{strip_whitespace};
-    
+
     # Apply optimizations if requested (EXPERIMENTAL - may be buggy)
     if ($opts->{optimize}) {
         eval {
@@ -157,16 +157,16 @@ sub minify_sub {
         };
         # Ignore optimization errors - they're experimental
     }
-    
+
     my $varmap = _shorten_vars($new_doc) if $opts->{shorten_vars};
 
     my $result = $new_doc->serialize;
-    
+
     # Post-process: replace variables in interpolated strings/regexes
     if ($varmap && %$varmap) {
         $result = _replace_vars_in_interpolations($result, $new_doc, $varmap);
     }
-    
+
     $result = _wrap($result, $new_doc, $opts->{wrap}) if $opts->{wrap};
 
     return $result;
@@ -215,13 +215,13 @@ sub _make_sub_anonymous {
 
     my @children = $sub->children;
     my $saw_sub = 0;
-    
+
     for my $child (@children) {
         if (!$saw_sub && $child->isa('PPI::Token::Word') && $child->content eq 'sub') {
             $saw_sub = 1;
             next;
         }
-        
+
         if ($saw_sub) {
             # Remove whitespace and the name word after 'sub'
             if ($child->isa('PPI::Token::Whitespace')) {
@@ -236,7 +236,7 @@ sub _make_sub_anonymous {
             }
         }
     }
-    
+
     # Ensure there's a single space between 'sub' and the block
     my @kids = $sub->children;
     if (@kids >= 2 && $kids[0]->isa('PPI::Token::Word') && $kids[0]->content eq 'sub') {
@@ -458,7 +458,7 @@ sub _shorten_vars {
 # We only replace within the content of interpolation-supporting tokens.
 sub _replace_vars_in_interpolations {
     my ($text, $doc, $map) = @_;
-    
+
     # Find all tokens that support interpolation
     my @interp_classes = qw(
         PPI::Token::Quote::Double
@@ -470,36 +470,36 @@ sub _replace_vars_in_interpolations {
         PPI::Token::Regexp::Substitute
         PPI::Token::HereDoc
     );
-    
+
     my @tokens;
     for my $class (@interp_classes) {
         my $found = $doc->find($class);
         push @tokens, @$found if ref $found eq 'ARRAY';
     }
-    
+
     return $text unless @tokens;
-    
+
     # Build a map of original content -> replacement content for each token
     my %replacements;
-    
+
     for my $tok (@tokens) {
         my $orig_content = $tok->content;
         my $new_content = $orig_content;
-        
+
         # Sort variables by length (longest first) to avoid partial replacements
         my @vars = sort { length($b) <=> length($a) } keys %$map;
-        
+
         for my $var (@vars) {
             my $replacement = $map->{$var};
             my $sigil = substr($var, 0, 1);
             my $name = substr($var, 1);
             my $short_name = substr($replacement, 1);
-            
+
             # Match the variable with word boundaries
             # Pattern: $varname followed by non-word-char or { or [ or end
             my $pattern = qr/\Q$var\E(?=\{|\[|[^\w]|\z)/;
             $new_content =~ s/$pattern/$replacement/g;
-            
+
             # Handle cross-sigil: if we renamed %hash, also rename $hash{...} and @hash[...]
             if ($sigil eq '%') {
                 $new_content =~ s/\$\Q$name\E(?=\{)/'$' . $short_name/ge;
@@ -508,12 +508,12 @@ sub _replace_vars_in_interpolations {
                 $new_content =~ s/\$\Q$name\E(?=\[)/'$' . $short_name/ge;
             }
         }
-        
+
         if ($new_content ne $orig_content) {
             $replacements{$orig_content} = $new_content;
         }
     }
-    
+
     # Apply replacements to the serialized text
     # We need to be careful to replace exact matches only
     for my $orig (keys %replacements) {
@@ -522,7 +522,7 @@ sub _replace_vars_in_interpolations {
         my $quoted = quotemeta($orig);
         $text =~ s/$quoted/$new/g;
     }
-    
+
     return $text;
 }
 
@@ -596,7 +596,7 @@ sub _extract_names_r {
 sub _next_short_name {
     my ($map, $orig) = @_;
     my $sigil = substr($orig, 0, 1);
-    
+
     # Build a hash of taken names for O(1) lookup instead of O(N) linear search
     my %taken = map { defined $_ ? ($_ => 1) : () } values %$map;
 
@@ -625,32 +625,32 @@ sub _next_short_name {
 
 sub _optimize_constant_folding {
     my ($doc) = @_;
-    
+
     # Find simple binary operations with constant operands
     my $statements = _find($doc, 'PPI::Statement');
-    
+
     for my $stmt (@$statements) {
         # Look for patterns like: my $x = 2 + 2;
         # This is a simplified implementation - full constant folding is complex
         my @children = $stmt->children;
-        
+
         for (my $i = 0; $i < @children - 2; $i++) {
             next unless $children[$i]->isa('PPI::Token::Number');
             next unless $children[$i+1]->isa('PPI::Token::Operator');
             next unless $children[$i+2]->isa('PPI::Token::Number');
-            
+
             my $left = $children[$i]->content;
             my $op = $children[$i+1]->content;
             my $right = $children[$i+2]->content;
-            
+
             # Only handle safe arithmetic operators
             next unless $op =~ /^[+\-*]$/;  # Removed division for safety
-            
+
             my $result;
             if ($op eq '+') { $result = $left + $right; }
             elsif ($op eq '-') { $result = $left - $right; }
             elsif ($op eq '*') { $result = $left * $right; }
-            
+
             # Create new token and replace
             my $new_token = PPI::Token::Number->new($result);
             eval {
@@ -663,7 +663,7 @@ sub _optimize_constant_folding {
                 # If replacement fails, just skip this optimization
                 last;
             }
-            
+
             last;  # Process one per statement for safety
         }
     }
@@ -671,13 +671,13 @@ sub _optimize_constant_folding {
 
 sub _optimize_dead_code {
     my ($doc) = @_;
-    
+
     # Find unreachable code after return/die/exit statements
     my $statements = _find($doc, 'PPI::Statement');
-    
+
     my $found_terminator = 0;
     my @to_delete;
-    
+
     for my $stmt (@$statements) {
         if ($found_terminator) {
             # This statement is after a terminator - it's dead code
@@ -686,18 +686,18 @@ sub _optimize_dead_code {
             push @to_delete, $stmt;
             next;
         }
-        
+
         # Check if this statement contains return/die/exit
         my $tokens = $stmt->tokens;
         for my $tok (@$tokens) {
-            if ($tok->isa('PPI::Token::Word') && 
+            if ($tok->isa('PPI::Token::Word') &&
                 $tok->content =~ /^(return|die|exit|croak|confess)$/) {
                 $found_terminator = 1;
                 last;
             }
         }
     }
-    
+
     # Delete dead statements
     $_->delete for @to_delete;
 }
@@ -779,10 +779,10 @@ sub _wrap {
             push @repacked, $final[$i];
             next;
         }
-        
+
         my $curr_line = $final[$i];
         my $prev_line = $repacked[-1];
-        
+
         # Try to append current line to previous if both fit.
         my $cand = $prev_line . $curr_line;
         if (length($cand) <= $width) {
@@ -795,11 +795,11 @@ sub _wrap {
                 # Check if this space is inside a string literal
                 my @prev_unsafe = _local_unsafe_ranges($prev_line);
                 my $space_is_safe = !_in_any_range($last_space, \@prev_unsafe);
-                
+
                 if ($space_is_safe) {
                     my $move_part = substr($prev_line, $last_space + 1);
                     my $new_curr = $move_part . ' ' . $curr_line;
-                    
+
                     # Only rebalance if new current line fits within width
                     # and is at least as long as the current line (no worse than before)
                     if (length($new_curr) <= $width && length($new_curr) >= length($curr_line)) {
@@ -826,14 +826,14 @@ sub _wrap {
             push @result_lines, $repacked[$i];
             next;
         }
-        
+
         my $prev = $result_lines[-1];
         my $curr = $repacked[$i];
-        
+
         # Check if prev ends with an unclosed string that continues in curr
         my $prev_ends_in_string = _line_ends_in_unclosed_string($prev);
         my $curr_starts_continuation = _line_starts_with_string_continuation($curr);
-        
+
         if ($prev_ends_in_string && $curr_starts_continuation) {
             # Need to close the string, add concat, newline, and reopen
             my $quote = $prev_ends_in_string; # '"' or "'"
@@ -843,7 +843,7 @@ sub _wrap {
             push @result_lines, $curr;
         }
     }
-    
+
     return join "\n", @result_lines;
 }
 
@@ -906,14 +906,14 @@ sub _split_line_safe {
             push @final_out, $out[$i];
             next;
         }
-        
+
         my $prev = $final_out[-1];
         my $curr = $out[$i];
-        
+
         # Check if prev ends with an unclosed string that continues in curr
         my $prev_ends_in_string = _line_ends_in_unclosed_string($prev);
         my $curr_starts_string = _line_starts_with_string_continuation($curr);
-        
+
         if ($prev_ends_in_string && $curr_starts_string) {
             # Need to close the string, add concat, and reopen
             # Determine quote type from prev
@@ -1051,13 +1051,13 @@ sub _in_any_range {
 # Returns the quote character ('"' or "'") if unclosed, undef otherwise.
 sub _line_ends_in_unclosed_string {
     my ($line) = @_;
-    
+
     # Count unescaped quotes
     my $in_string = '';
     my $i = 0;
     while ($i < length($line)) {
         my $ch = substr($line, $i, 1);
-        
+
         if (!$in_string) {
             if ($ch eq '"' || $ch eq "'") {
                 $in_string = $ch;
@@ -1071,7 +1071,7 @@ sub _line_ends_in_unclosed_string {
         }
         $i++;
     }
-    
+
     return $in_string || undef;
 }
 
@@ -1079,7 +1079,7 @@ sub _line_ends_in_unclosed_string {
 # previous line had an unclosed string.
 sub _line_starts_with_string_continuation {
     my ($line) = @_;
-    
+
     # If the line starts with characters that would be valid inside a string
     # followed by a closing quote, it's likely a continuation.
     # This is a heuristic: we check if there's a quote near the start.

@@ -763,13 +763,87 @@ sub _wrap {
     my @final;
     for my $l (@lines) {
         if (length($l) > $width) {
-            push @final, _split_line_safe($l, $width, \@unsafe_ranges);
+            my $split_result = _split_line_safe($l, $width, \@unsafe_ranges);
+            push @final, split /\n/, $split_result;
         } else {
             push @final, $l;
         }
     }
 
-    return join "\n", @final;
+    # Repack: if a line is short and the next line would fit when combined, merge them.
+    # Also rebalance: if a line is very short, try to move content from the previous line.
+    my @repacked;
+    for my $i (0 .. $#final) {
+        if (!@repacked) {
+            push @repacked, $final[$i];
+            next;
+        }
+        
+        my $curr_line = $final[$i];
+        my $prev_line = $repacked[-1];
+        
+        # Try to append current line to previous if both fit.
+        my $cand = $prev_line . $curr_line;
+        if (length($cand) <= $width) {
+            $repacked[-1] = $cand;
+        } elsif (length($curr_line) < $width / 3 && length($prev_line) > $width * 0.75) {
+            # Current line is quite short and previous line is quite full.
+            # Try to rebalance by moving content from previous to current.
+            my $last_space = rindex($prev_line, ' ');
+            if ($last_space > 0) {
+                # Check if this space is inside a string literal
+                my @prev_unsafe = _local_unsafe_ranges($prev_line);
+                my $space_is_safe = !_in_any_range($last_space, \@prev_unsafe);
+                
+                if ($space_is_safe) {
+                    my $move_part = substr($prev_line, $last_space + 1);
+                    my $new_curr = $move_part . ' ' . $curr_line;
+                    
+                    # Only rebalance if new current line fits within width
+                    # and is at least as long as the current line (no worse than before)
+                    if (length($new_curr) <= $width && length($new_curr) >= length($curr_line)) {
+                        $repacked[-1] = substr($prev_line, 0, $last_space);
+                        push @repacked, $new_curr;
+                    } else {
+                        push @repacked, $curr_line;
+                    }
+                } else {
+                    push @repacked, $curr_line;
+                }
+            } else {
+                push @repacked, $curr_line;
+            }
+        } else {
+            push @repacked, $curr_line;
+        }
+    }
+
+    # Join lines, handling string literals that span line breaks
+    my @result_lines;
+    for my $i (0 .. $#repacked) {
+        if ($i == 0) {
+            push @result_lines, $repacked[$i];
+            next;
+        }
+        
+        my $prev = $result_lines[-1];
+        my $curr = $repacked[$i];
+        
+        # Check if prev ends with an unclosed string that continues in curr
+        my $prev_ends_in_string = _line_ends_in_unclosed_string($prev);
+        my $curr_starts_continuation = _line_starts_with_string_continuation($curr);
+        
+        if ($prev_ends_in_string && $curr_starts_continuation) {
+            # Need to close the string, add concat, newline, and reopen
+            my $quote = $prev_ends_in_string; # '"' or "'"
+            $result_lines[-1] = $prev . $quote . '.';
+            push @result_lines, $quote . $curr;
+        } else {
+            push @result_lines, $curr;
+        }
+    }
+    
+    return join "\n", @result_lines;
 }
 
 # Find byte offset of the first occurrence of $line within $text starting at $start.
@@ -824,7 +898,33 @@ sub _split_line_safe {
         push @out, $tail;
     }
 
-    return join "\n", @out;
+    # Join segments, but handle string literals that span across breaks
+    my @final_out;
+    for my $i (0 .. $#out) {
+        if ($i == 0) {
+            push @final_out, $out[$i];
+            next;
+        }
+        
+        my $prev = $final_out[-1];
+        my $curr = $out[$i];
+        
+        # Check if prev ends with an unclosed string that continues in curr
+        my $prev_ends_in_string = _line_ends_in_unclosed_string($prev);
+        my $curr_starts_string = _line_starts_with_string_continuation($curr);
+        
+        if ($prev_ends_in_string && $curr_starts_string) {
+            # Need to close the string, add concat, and reopen
+            # Determine quote type from prev
+            my $quote = $prev_ends_in_string; # '"' or "'"
+            $final_out[-1] = $prev . $quote . '.';
+            push @final_out, $quote . $curr;
+        } else {
+            push @final_out, $curr;
+        }
+    }
+
+    return join "\n", @final_out;
 }
 
 # Walk $line with a quote/regex-aware state machine and return [start,end) ranges
@@ -943,6 +1043,46 @@ sub _in_any_range {
     for my $r (@$ranges) {
         return 1 if $pos >= $r->[0] && $pos < $r->[1];
     }
+    return 0;
+}
+
+# Check if a line ends with an unclosed string literal.
+# Returns the quote character ('"' or "'") if unclosed, undef otherwise.
+sub _line_ends_in_unclosed_string {
+    my ($line) = @_;
+    
+    # Count unescaped quotes
+    my $in_string = '';
+    my $i = 0;
+    while ($i < length($line)) {
+        my $ch = substr($line, $i, 1);
+        
+        if (!$in_string) {
+            if ($ch eq '"' || $ch eq "'") {
+                $in_string = $ch;
+            }
+        } else {
+            if ($ch eq '\\') {
+                $i++; # Skip next char
+            } elsif ($ch eq $in_string) {
+                $in_string = '';
+            }
+        }
+        $i++;
+    }
+    
+    return $in_string || undef;
+}
+
+# Check if a line starts with content that would be inside a string if the
+# previous line had an unclosed string.
+sub _line_starts_with_string_continuation {
+    my ($line) = @_;
+    
+    # If the line starts with characters that would be valid inside a string
+    # followed by a closing quote, it's likely a continuation.
+    # This is a heuristic: we check if there's a quote near the start.
+    return 1 if $line =~ /^[^\\"']*["']/;
     return 0;
 }
 

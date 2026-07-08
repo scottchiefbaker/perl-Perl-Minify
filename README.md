@@ -9,13 +9,13 @@ non-essential whitespace, with optional lexical-variable shortening.
 use Perl::Minify qw(minify minify_sub);
 
 # Minify a whole file's worth of code
-my $min = minify($source);
+my $min = minify($source_str);
 
 # With options (all keys optional):
-my $min = minify($source, { shorten_vars => 1, wrap => 100 });
+my $min = minify($source_str, { shorten_vars => 1, wrap => 100 });
 
 # Extract & minify a single sub
-my $sub = minify_sub($source, 'color', { wrap => 80 });
+my $sub = minify_sub($source_str, 'color', { wrap => 80 });
 ```
 
 ## Functions
@@ -46,7 +46,7 @@ wrap              0   if >0, word-wrap output to <=N columns
 keep_name         1   preserve the sub name in C<minify_sub> output
 ```
 
-### shorten\_vars Limitations
+### `shorten_vars` Limitations
 
 Renaming is skipped for symbols that appear inside string quotes, regex
 literals, `s///e` replacement blocks, heredocs, and interpolations. Symbolic

@@ -784,7 +784,12 @@ sub _wrap {
         my $prev_line = $repacked[-1];
 
         # Try to append current line to previous if both fit.
-        my $cand = $prev_line . $curr_line;
+        # Add a space separator only when needed (prev ends with word-char AND
+        # curr starts with word-char), e.g. inside qw() where splitting consumed
+        # the separating space. In most other cases (; boundary, ) boundary),
+        # no space is needed.
+        my $sep = ($prev_line =~ /\w$/ && $curr_line =~ /^\w/) ? ' ' : '';
+        my $cand = $prev_line . $sep . $curr_line;
         if (length($cand) <= $width) {
             $repacked[-1] = $cand;
         } elsif (length($curr_line) < $width / 3 && length($prev_line) > $width * 0.75) {
@@ -815,6 +820,21 @@ sub _wrap {
                 push @repacked, $curr_line;
             }
         } else {
+            # Try splitting curr_line at its first semicolon (that is not at the very
+            # end). This handles the case where greedy packing merged multiple statements
+            # onto one line, making it too long to merge with prev_line. Splitting at a
+            # statement boundary keeps code intact and avoids breaking inside qw().
+            my $semi_pos = index($curr_line, ';');
+            if ($semi_pos > 0 && $semi_pos < length($curr_line) - 1) {
+                my $prefix = substr($curr_line, 0, $semi_pos + 1);   # include the ;
+                my $suffix = substr($curr_line, $semi_pos + 1);
+                my $cand_split = $prev_line . $sep . $prefix;
+                if (length($cand_split) <= $width) {
+                    $repacked[-1] = $cand_split;
+                    push @repacked, $suffix;
+                    next;
+                }
+            }
             push @repacked, $curr_line;
         }
     }

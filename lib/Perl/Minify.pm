@@ -1181,6 +1181,40 @@ An overlong statement with no break point that is outside a string/regex
 literal is emitted as a single line that may exceed the requested width.
 This never breaks a string literal mid-character.
 
+=head1 COMMAND LINE SCRIPT
+
+This distribution ships a small wrapper script, F<minify.pl>, that minifies a
+Perl source file and prints the result to STDOUT. It always enables variable
+shortening and accepts an optional line-width for word wrapping.
+
+    # Minify a file (variable shortening on, no wrapping)
+    perl minify.pl script.pl
+
+    # Minify and wrap output to 80 columns
+    perl minify.pl script.pl --width 80
+
+    # Redirect to a file
+    perl minify.pl script.pl --width 80 > script.min.pl
+
+=head2 Arguments
+
+=over 4
+
+=item C<FILE>
+
+Path to the Perl source file to minify (required). The script dies with a
+usage message if the file is missing or unreadable.
+
+=item C<--width N>
+
+If given, word-wraps the minified output to at most C<N> columns. Omit it to
+emit a single, unwrapped line.
+
+=back
+
+The script never overwrites the input; capture its STDOUT to save the result.
+Internally it calls C<minify> with C<{ shorten_vars =E<gt> 1, wrap =E<gt> $width }>.
+
 =head1 AUTHOR
 
 Scottchiefbaker - https://github.com/scottchiefbaker/

@@ -20,7 +20,7 @@ our $ERROR = '';
 sub minify_error { return $ERROR }
 
 # Keys we actually read from the user-supplied options hashref.
-my @KNOWN_OPTS = qw(strip_comments strip_pod strip_whitespace shorten_vars wrap cache source_map optimize keep_name);
+my @KNOWN_OPTS = qw(strip_comments strip_pod strip_whitespace shorten_vars wrap optimize keep_name);
 
 # Punctuation operators/structures where adjacent whitespace is never significant.
 my %PUNCT_OP = map { $_ => 1 } (
@@ -42,7 +42,7 @@ my @UNSAFE_TOKEN_CLASSES = qw(
     PPI::Token::QuoteLike::Readline
     PPI::Token::Regexp::Match
     PPI::Token::Regexp::Substitute
-    PPI::Token::Regexp::Transulate
+    PPI::Token::Regexp::Transliterate
     PPI::Token::HereDoc
     PPI::Token::Data
     PPI::Token::Pod
@@ -185,8 +185,6 @@ sub _resolve_opts {
         strip_whitespace => 1,
         shorten_vars     => 0,
         wrap             => 0,
-        cache            => 0,
-        source_map       => 0,
         optimize         => 0,
         keep_name        => 1,
     );
@@ -1150,6 +1148,12 @@ explicitly or via C<:all>.
 Locates a named subroutine, and runs the minification pipeline on it
 alone. Returns C<undef> on parse failure or if no sub named C<$sub_name>
 is found.
+
+=head2 minify_error()
+
+Returns the last error message set by a failed C<minify> or
+C<minify_sub> call (also available as C<$Perl::Minify::ERROR>). Returns
+an empty string when the most recent call succeeded.
 
 =head1 OPTIONS
 

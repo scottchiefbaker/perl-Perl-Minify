@@ -107,7 +107,7 @@ sub minify {
         $result = _replace_vars_in_interpolations($result, $doc, $varmap);
     }
 
-    $result = _wrap($result, $doc, $opts->{wrap}) if $opts->{wrap};
+    $result = _wrap($result, $opts->{wrap}) if $opts->{wrap};
 
     return $result;
 }
@@ -167,7 +167,7 @@ sub minify_sub {
         $result = _replace_vars_in_interpolations($result, $new_doc, $varmap);
     }
 
-    $result = _wrap($result, $new_doc, $opts->{wrap}) if $opts->{wrap};
+    $result = _wrap($result, $opts->{wrap}) if $opts->{wrap};
 
     return $result;
 }
@@ -706,11 +706,17 @@ sub _optimize_dead_code {
 # Word wrap (string/regex aware)
 
 sub _wrap {
-    my ($text, $doc, $width) = @_;
+    my ($text, $width) = @_;
     return $text unless $width > 0 && length($text) > $width;
 
     # Build per-token offset map + unsafe ranges + semicolon offsets.
-    my $all_tokens = _find($doc, 'PPI::Token');
+    # Derive tokens from $text itself (a fresh parse) rather than the caller's
+    # $doc, because $text may have been post-processed by
+    # _replace_vars_in_interpolations(), which changes string lengths and
+    # invalidates offsets computed against the original document.
+    my $wrap_doc = PPI::Document->new(\$text);
+    my $all_tokens = $wrap_doc ? $wrap_doc->find('PPI::Token') : [];
+    $all_tokens = ref $all_tokens ? $all_tokens : [];
     my @unsafe_ranges;
     my @semi_offsets;
     {

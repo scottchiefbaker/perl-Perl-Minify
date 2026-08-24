@@ -8,6 +8,7 @@ my %opts = (
 	AUTHOR             => 'Scott Baker <bakerscot@cpan.org>',
 	LICENSE            => 'perl',
 	MIN_PERL_VERSION   => '5.016',
+	EXE_FILES          => [ 'minify.pl' ],
 	PREREQ_PM          => {
 		'PPI' => '0',
 	},

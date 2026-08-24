@@ -6,7 +6,6 @@ lib/Perl/Minify.pm
 LICENSE
 Makefile.PL
 MANIFEST
-MANIFEST.SKIP
 minify.pl
 README.md
 t/00-basic.t

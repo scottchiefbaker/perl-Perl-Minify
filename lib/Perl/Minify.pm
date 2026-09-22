@@ -20,7 +20,7 @@ our $ERROR = '';
 sub minify_error { return $ERROR }
 
 # Keys we actually read from the user-supplied options hashref.
-my @KNOWN_OPTS = qw(strip_comments strip_pod strip_whitespace shorten_vars wrap optimize keep_name);
+my @KNOWN_OPTS = qw(strip_comments strip_pod strip_whitespace strip_semicolons shorten_vars wrap optimize keep_name);
 
 # Keywords where a space directly before '{' is never significant
 # ("sub foo {", "else {", "grep { ... } ..."). All verified valid Perl.
@@ -92,6 +92,7 @@ sub minify {
     _strip_comments($doc)   if $opts->{strip_comments};
     _strip_pod($doc)        if $opts->{strip_pod};
     _strip_whitespace($doc) if $opts->{strip_whitespace};
+    _strip_semicolons($doc) if $opts->{strip_semicolons};
 
     # Apply optimizations if requested (EXPERIMENTAL - may be buggy)
     if ($opts->{optimize}) {
@@ -152,6 +153,7 @@ sub minify_sub {
     _strip_comments($new_doc)   if $opts->{strip_comments};
     _strip_pod($new_doc)        if $opts->{strip_pod};
     _strip_whitespace($new_doc) if $opts->{strip_whitespace};
+    _strip_semicolons($new_doc) if $opts->{strip_semicolons};
 
     # Apply optimizations if requested (EXPERIMENTAL - may be buggy)
     if ($opts->{optimize}) {
@@ -187,6 +189,7 @@ sub _resolve_opts {
         strip_comments   => 1,
         strip_pod        => 1,
         strip_whitespace => 1,
+        strip_semicolons => 1,
         shorten_vars     => 0,
         wrap             => 0,
         optimize         => 0,
@@ -363,6 +366,36 @@ sub _strip_whitespace {
 
         # Default: delete unnecessary whitespace.
         $ws->delete;
+    }
+}
+
+# A semicolon is optional before a closing block delimiter when the statement
+# already ends in an expression. Avoid keyword-only statements and labels:
+# removing their terminator can change the grammar (or make a label invalid).
+sub _strip_semicolons {
+    my ($doc) = @_;
+    my $blocks = _find($doc, 'PPI::Structure::Block');
+
+    for my $block (@$blocks) {
+        my @children = grep {
+            !$_->isa('PPI::Token::Whitespace')
+                && !$_->isa('PPI::Token::Comment')
+        } $block->children;
+        my $stmt = $children[-1];
+        next unless $stmt && $stmt->isa('PPI::Statement');
+
+        my @tokens = $stmt->tokens;
+        my $semi = pop @tokens;
+        next unless $semi && $semi->isa('PPI::Token::Structure')
+                 && $semi->content eq ';';
+
+        my $last = $tokens[-1];
+        next unless $last;
+        next if $last->isa('PPI::Token::Word')
+             || $last->isa('PPI::Token::Operator')
+             || $last->isa('PPI::Token::Comment');
+
+        $semi->delete;
     }
 }
 
@@ -1201,10 +1234,11 @@ an empty string when the most recent call succeeded.
 All options are optional; pass them as a hashref. Unknown keys are
 ignored silently. Defaults:
 
-    strip_comments    1   remove C<#> line comments
-    strip_pod         1   remove POD blocks
-    strip_whitespace  1   collapse non-significant whitespace
-    shorten_vars      0   rename lexicals to short names ($c, $d, ...)
+     strip_comments    1   remove C<#> line comments
+     strip_pod         1   remove POD blocks
+     strip_whitespace  1   collapse non-significant whitespace
+     strip_semicolons  1   remove safe terminators before C<}> block delimiters
+     shorten_vars      0   rename lexicals to short names ($c, $d, ...)
     wrap              0   if >0, word-wrap output to <=N columns
     keep_name         1   preserve the sub name in C<minify_sub> output
     optimize          0   EXPERIMENTAL: fold Number/Op/Number arithmetic

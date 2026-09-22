@@ -55,4 +55,18 @@ my $r11 = minify("print \"héllo wörld\\n\";");
 ok(defined($r11), 'Unicode returns defined');
 ok($r11 =~ /héllo wörld/, 'Unicode in strings preserved') or diag "got: $r11";
 
+# 11. Safe semicolon elision before a block close.
+my $r12 = minify('sub f { my $x = 1; return $x; }');
+ok(defined($r12), 'semicolon elision returns defined');
+like($r12, qr/my\$x=1;return\$x}/, 'expression terminators before } are removed')
+    or diag "got: $r12";
+
+# Labels and keyword-only statements retain their terminators.
+my $r13 = minify('sub f { LABEL:; next; }');
+like($r13, qr/LABEL:;next;/, 'labels and keyword-only statements are preserved');
+
+# Opting out preserves semicolons.
+my $r14 = minify('sub f { return 1; }', { strip_semicolons => 0 });
+like($r14, qr/return\s+1;/, 'semicolon stripping can be disabled');
+
 done_testing;

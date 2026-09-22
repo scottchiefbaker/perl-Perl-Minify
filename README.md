@@ -47,6 +47,7 @@ ignored silently. Defaults:
 strip_comments    1   remove C<#> line comments
 strip_pod         1   remove POD blocks
 strip_whitespace  1   collapse non-significant whitespace
+strip_semicolons  1   remove safe terminators before C<}> block delimiters
 shorten_vars      0   rename lexicals to short names ($c, $d, ...)
 wrap              0   if >0, word-wrap output to <=N columns
 keep_name         1   preserve the sub name in C<minify_sub> output

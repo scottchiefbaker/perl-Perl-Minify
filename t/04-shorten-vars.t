@@ -46,4 +46,17 @@ ok(defined($r7), 's///e with hash returns defined');
 ok($r7 =~ /state%c=/, '%color_map renamed to %c') or diag "got: $r7";
 ok($r7 =~ /\$c\{y\}/, '$color_map{y} renamed to $c{y} in s///e') or diag "got: $r7";
 
+
+
+# 8. for my $x declaration with normal spacing (strip_whitespace => 0)
+my $r8 = minify('for my $item (1..3) { print $item; }', { shorten_vars => 1, strip_whitespace => 0 });
+ok(defined($r8), 'for my with spacing returns defined') or diag "got: " . ($r8 // 'undef');
+ok($r8 =~ /for\s+my\s+\$c/, 'declared var in for-my renamed') or diag "got: $r8";
+ok($r8 =~ /print\s+\$c/, 'usage in for-my body renamed') or diag "got: $r8";
+
+my $r9 = minify('for my $item (1..3) { print $item; }', { shorten_vars => 1 });
+ok(defined($r9), 'for my default opts returns defined') or diag "got: " . ($r9 // 'undef');
+ok($r9 =~ /my\$c/ && $r9 =~ /print\$c/, 'for-my rename with default strip') or diag "got: $r9";
+
+
 done_testing;

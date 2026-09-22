@@ -29,4 +29,19 @@ my $r4 = minify('my $x = 2 + 3;');
 ok(defined($r4), 'default (no optimize) works');
 like($r4, qr/2\+3/, 'expression not optimized by default') or diag "got: $r4";
 
+
+# 5. Constant folding chains (folds down fully)
+my $r5 = minify('my $x = 2 + 3 + 4;', { optimize => 1 });
+ok(defined($r5), 'chain fold returns defined');
+like($r5, qr/=9;/, 'chain 2+3+4 folds to 9') or diag "got: $r5";
+
+# 6. Precedence guard: +/- next to * is folded in the correct order
+my $r6 = minify('my $x = 2 - 3 * 4;', { optimize => 1 });
+ok(defined($r6), 'precedence case returns defined');
+like($r6, qr/=-10;/, '2-3*4 folds to -10 (guard respected)') or diag "got: $r6";
+
+# 7. Precedence guard: +/- next to ** untouched entirely
+my $r7 = minify('my $x = 2**3 + 4;', { optimize => 1 });
+like($r7, qr/2\*\*3\+4;/, '2**3+4 left unfolded') or diag "got: $r7";
+
 done_testing;

@@ -22,6 +22,10 @@ sub minify_error { return $ERROR }
 # Keys we actually read from the user-supplied options hashref.
 my @KNOWN_OPTS = qw(strip_comments strip_pod strip_whitespace shorten_vars wrap optimize keep_name);
 
+# Keywords where a space directly before '{' is never significant
+# ("sub foo {", "else {", "grep { ... } ..."). All verified valid Perl.
+my %BLOCK_KEYWORD = map { $_ => 1 } qw(sub else elsif unless grep map sort);
+
 # Punctuation operators/structures where adjacent whitespace is never significant.
 my %PUNCT_OP = map { $_ => 1 } (
     '+', '-', '*', '/', '%', '**', ',', ';', ':', '.', '=', '==', '!=',
@@ -348,6 +352,15 @@ sub _strip_whitespace {
             next;
         }
 
+        # Rule 8: "keyword {" -> "keyword{" (sub name, else, elsif, unless,
+        # grep/map/sort with block). Space is never significant here and the
+        # word cannot run into '{'.
+        if ($next->isa('PPI::Structure::Block') && $nc eq '{'
+            && $prev->isa('PPI::Token::Word') && $BLOCK_KEYWORD{ $pc }) {
+            $ws->delete;
+            next;
+        }
+
         # Default: delete unnecessary whitespace.
         $ws->delete;
     }
@@ -411,7 +424,16 @@ sub _shorten_vars {
         for (my $i = 0; $i < @kids; $i++) {
             my $c = $kids[$i];
             next unless $c->isa('PPI::Token::Word') && $c->content =~ /^(my|our|state)$/;
-            my $n = $kids[$i + 1] // next;
+            # Skip whitespace/comments to the first significant token after
+            # the declaration keyword, so "for my $x ..." works even when the
+            # token stream still contains spacing (strip_whitespace => 0).
+            my $j = $i + 1;
+            while ($j < @kids
+                && ($kids[$j]->isa('PPI::Token::Whitespace')
+                 || $kids[$j]->isa('PPI::Token::Comment'))) {
+                $j++;
+            }
+            my $n = $kids[$j] // next;
             next unless $n->isa('PPI::Token::Symbol');
             my $name = $n->content;
             next unless $name =~ /^[\$\@\%]/;
@@ -624,45 +646,64 @@ sub _next_short_name {
 sub _optimize_constant_folding {
     my ($doc) = @_;
 
-    # Find simple binary operations with constant operands
+    # Find simple binary operations with constant operands.
+    # We work on SIGNIFICANT children (schildren) so spacing doesn't hide
+    # Number/Operator/Number triples, and we fold in place (mutate the Number
+    # token's content + remove the operator and its neighbouring whitespace)
+    # rather than inserting new tokens.
     my $statements = _find($doc, 'PPI::Statement');
 
     for my $stmt (@$statements) {
-        # Look for patterns like: my $x = 2 + 2;
-        # This is a simplified implementation - full constant folding is complex
-        my @children = $stmt->children;
+        my $folded = 1;
+        while ($folded) {
+            $folded = 0;
 
-        for (my $i = 0; $i < @children - 2; $i++) {
-            next unless $children[$i]->isa('PPI::Token::Number');
-            next unless $children[$i+1]->isa('PPI::Token::Operator');
-            next unless $children[$i+2]->isa('PPI::Token::Number');
+            my @sig = $stmt->schildren;
 
-            my $left = $children[$i]->content;
-            my $op = $children[$i+1]->content;
-            my $right = $children[$i+2]->content;
+            for (my $i = 0; $i < $#sig - 1; $i++) {
+                next unless $sig[$i]->isa('PPI::Token::Number');
+                next unless $sig[$i+1]->isa('PPI::Token::Operator');
+                next unless $sig[$i+2]->isa('PPI::Token::Number');
 
-            # Only handle safe arithmetic operators
-            next unless $op =~ /^[+\-*]$/;  # Removed division for safety
+                my $left = $sig[$i]->content;
+                my $op = $sig[$i+1]->content;
+                my $right = $sig[$i+2]->content;
 
-            my $result;
-            if ($op eq '+') { $result = $left + $right; }
-            elsif ($op eq '-') { $result = $left - $right; }
-            elsif ($op eq '*') { $result = $left * $right; }
+                # Only handle safe arithmetic operators
+                next unless $op =~ /^[+\-*]$/;  # Division excluded for safety
 
-            # Create new token and replace
-            my $new_token = PPI::Token::Number->new($result);
-            eval {
-                $new_token->insert_before($children[$i]);
-                $children[$i]->delete;
-                $children[$i+1]->delete;
-                $children[$i+2]->delete;
-            };
-            if ($@) {
-                # If replacement fails, just skip this optimization
+                # Precedence guard for chained folds: a +/- pair must not sit
+                # next to a */ or ** operator, otherwise left-to-right folding
+                # would evaluate out of order (e.g. 2 - 3 * 4 folding 2-3).
+                my $before_t = $sig[$i]->sprevious_sibling;
+                my $after_t = $sig[$i+2]->snext_sibling;
+                my $before = $before_t && $before_t->isa('PPI::Token::Operator') ? $before_t->content : '';
+                my $after = $after_t && $after_t->isa('PPI::Token::Operator') ? $after_t->content : '';
+                my $high = qr{^[/*]$|^\*\*$};
+                if ($op =~ /^[+\-]$/ && ($before =~ $high || $after =~ $high)) {
+                    next;
+                }
+                if ($op eq '*' && $before eq '/') {
+                    next;
+                }
+
+                my $result;
+                if    ($op eq '+') { $result = $left + $right; }
+                elsif ($op eq '-') { $result = $left - $right; }
+                else               { $result = $left * $right; }
+
+                # Fold in place: rewrite the left number with the result and
+                # drop the operator and right operand. Whitespace cleanup is
+                # left to the whitespace stripping pass (which runs after
+                # optimize), so chained folds re-rescan cleanly.
+                $sig[$i]->{content} = $result;
+                $sig[$i+1]->delete;
+                $sig[$i+2]->delete;
+
+                # Successful fold - rescan the statement for more folds
+                $folded = 1;
                 last;
             }
-
-            last;  # Process one per statement for safety
         }
     }
 }
@@ -1166,6 +1207,9 @@ ignored silently. Defaults:
     shorten_vars      0   rename lexicals to short names ($c, $d, ...)
     wrap              0   if >0, word-wrap output to <=N columns
     keep_name         1   preserve the sub name in C<minify_sub> output
+    optimize          0   EXPERIMENTAL: fold Number/Op/Number arithmetic
+                          chains in place, and remove statements after a
+                          terminator (return/die/exit/...) when detected
 
 =head2 C<shorten_vars> limitations
 

@@ -1,7 +1,5 @@
 bench.pl
 CHANGELOG.md
-color.pl
-example.pl
 lib/Perl/Minify.pm
 LICENSE
 Makefile.PL

@@ -1146,29 +1146,86 @@ __END__
 
 =head1 NAME
 
-Perl::Minify - Compress Perl source by stripping comments, POD, and
-non-essential whitespace, with optional lexical-variable shortening.
+Perl::Minify - Minify Perl source with the C<minify.pl> command or from Perl code
 
 =head1 SYNOPSIS
 
+    # Primary use: the minify.pl command
+    minify.pl script.pl > script.min.pl
+    minify.pl script.pl --width 80 > script.min.pl
+    minify.pl script.pl --sub color > color.min.pl
+
+    # Programmatic use
     use Perl::Minify qw(minify minify_sub);
+    my $min = minify($source_str, { wrap => 100 });
 
-    # Minify a whole file's worth of code
-    my $min = minify($source_str);
+=head1 DESCRIPTION
 
-    # With options (all keys optional):
-    my $min = minify($source_str, { shorten_vars => 1, wrap => 100 });
+Perl::Minify shrinks Perl source by stripping comments and POD, collapsing
+non-essential whitespace, and optionally shortening lexical variable names
+and wrapping lines.
 
-    # Extract & minify a single sub
-    my $sub = minify_sub($source_str, 'color', { wrap => 80 });
+Most users want the F<minify.pl> command, which is installed with this
+distribution. Give it a file and it prints the minified code to STDOUT. The
+module API is only needed when your own Perl program has to minify source.
 
-=head1 FUNCTIONS
+=head1 COMMAND LINE USAGE
+
+    minify.pl FILE [--width N] [--sub NAME]
+
+Reads FILE and prints the minified code to STDOUT. The input file is never
+modified, so redirect STDOUT to save the result.
+
+    # Minify a whole file
+    minify.pl script.pl > script.min.pl
+
+    # Minify and word-wrap to 80 columns
+    minify.pl script.pl --width 80 > script.min.pl
+
+    # Emit only one named subroutine
+    minify.pl script.pl --sub color > color.min.pl
+
+=head2 Arguments
+
+=over 4
+
+=item C<FILE>
+
+Path to the Perl source file (required). If the file is missing or
+unreadable, a usage message is printed and the script exits with an error.
+
+=item C<--width N>
+
+Word-wrap the output to at most C<N> columns. Without it, the output is a
+single unwrapped line.
+
+=item C<--sub NAME>
+
+Minify only the subroutine C<NAME>. It is printed as bare source with its
+name kept (see C<minify_sub> under MODULE API). If no such sub
+exists, the error is written to STDERR and the script exits 1.
+
+=back
+
+=head2 Behavior
+
+C<minify.pl> always enables C<shorten_vars>, and it always uses the default
+stripping behavior (comments, POD, whitespace, and semicolons are removed).
+Those settings and C<optimize> are not available as command line flags. If
+you need different options, use the module API below.
+
+If the source cannot be parsed, the error is written to STDERR and the
+script exits 1.
+
+=head1 MODULE API
+
+Use the module when your own code needs to minify Perl source. Nothing is
+exported by default; import the functions you need.
 
 =head2 minify($code, \%opts?)
 
 Minifies a string of Perl source. Returns the minified string, or C<undef>
-on PPI parse failure. By default nothing is exported; import C<minify>
-explicitly or via C<:all>.
+on PPI parse failure.
 
 =head2 minify_sub($code, $sub_name, \%opts?)
 
@@ -1188,8 +1245,8 @@ an empty string when the most recent call succeeded.
 
 =head1 OPTIONS
 
-All options are optional; pass them as a hashref. Unknown keys are
-ignored silently. Defaults:
+Options are passed to the module functions as a hashref. All are optional,
+and unknown keys are ignored. Defaults:
 
      strip_comments    1   remove C<#> line comments
      strip_pod         1   remove POD blocks
@@ -1201,7 +1258,9 @@ ignored silently. Defaults:
      optimize          0   EXPERIMENTAL: fold simple Number +/-/* chains
                            (e.g. C<2 + 3 + 4> becomes C<9>)
 
-=head2 C<shorten_vars> limitations
+=head1 LIMITATIONS
+
+=head2 C<shorten_vars>
 
 Renaming is skipped for symbols that appear inside string quotes, regex
 literals, C<s///e> replacement blocks, heredocs, and interpolations. Symbolic
@@ -1209,55 +1268,20 @@ references are not renamed. The renamer uses one global per-document map, so
 two distinct C<my> declarations with the same name (in different scopes)
 share a single short name.
 
-=head2 wrap limitation
+=head2 C<wrap>
 
 An overlong statement with no break point that is outside a string/regex
 literal is emitted as a single line that may exceed the requested width.
 This never breaks a string literal mid-character.
 
-=head1 COMMAND LINE SCRIPT
+=head1 INSTALLATION
 
-This distribution ships a small wrapper script, F<minify.pl>, that minifies a
-Perl source file and prints the result to STDOUT. It always enables variable
-shortening and accepts an optional line-width for word wrapping.
+    perl Makefile.PL
+    make
+    make test
+    make install
 
-    # Minify a file (variable shortening on, no wrapping)
-    perl minify.pl script.pl
-
-    # Minify and wrap output to 80 columns
-    perl minify.pl script.pl --width 80
-
-    # Emit only one named sub (bare, name kept)
-    perl minify.pl script.pl --sub color
-
-    # Redirect to a file
-    perl minify.pl script.pl --width 80 > script.min.pl
-
-=head2 Arguments
-
-=over 4
-
-=item C<FILE>
-
-Path to the Perl source file to minify (required). The script dies with a
-usage message if the file is missing or unreadable.
-
-=item C<--width N>
-
-If given, word-wraps the minified output to at most C<N> columns. Omit it to
-emit a single, unwrapped line.
-
-=item C<--sub NAME>
-
-If given, only the subroutine named C<NAME> is minified and printed, as a
-bare sub with its name kept. Exits 1 with the error on STDERR if no such sub
-exists.
-
-=back
-
-The script never overwrites the input; capture its STDOUT to save the result.
-Internally it calls C<minify> with C<{ shorten_vars =E<gt> 1, wrap =E<gt> $width }>,
-or C<minify_sub> with the same options when C<--sub> is given.
+Requires Perl v5.16 or later, and the CPAN module C<PPI> (C<cpan PPI>).
 
 =head1 AUTHOR
 

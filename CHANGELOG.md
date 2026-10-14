@@ -6,6 +6,7 @@
 - Rework POD and README to put `minify.pl` first as the primary interface, with the module API documented after it.
 - README: document `minify.pl --sub NAME` and add installation instructions.
 - Add Versioning rules to AGENTS.md.
+- Add `escape_newlines` option (default on) that writes literal LF, TAB, and CR inside string literals as `\n`, `\t`, `\r`. Single-quoted and `q()` strings containing these characters are re-emitted as double-quoted strings. Strings with code inside interpolations are left alone.
 
 ## 0.03
 

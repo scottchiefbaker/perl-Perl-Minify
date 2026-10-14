@@ -123,6 +123,7 @@ strip_semicolons  1   remove safe terminators before } block delimiters
 shorten_vars      0   rename lexicals to short names ($c, $d, ...)
 wrap              0   if >0, word-wrap output to <=N columns
 keep_name         1   preserve the sub name in minify_sub output
+escape_newlines   1   write LF/TAB/CR in strings as \n \t \r escapes
 optimize          0   EXPERIMENTAL: fold simple Number +/-/* chains
                       (e.g. 2 + 3 + 4 becomes 9)
 ```

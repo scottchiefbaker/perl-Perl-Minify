@@ -20,7 +20,7 @@ our $ERROR = '';
 sub minify_error { return $ERROR }
 
 # Keys we actually read from the user-supplied options hashref.
-my @KNOWN_OPTS = qw(strip_comments strip_pod strip_whitespace strip_semicolons shorten_vars wrap optimize keep_name);
+my @KNOWN_OPTS = qw(strip_comments strip_pod strip_whitespace strip_semicolons shorten_vars wrap optimize keep_name escape_newlines);
 
 # Keywords where a space directly before '{' is never significant
 # ("sub foo {", "else {", "grep { ... } ..."). All verified valid Perl.
@@ -98,6 +98,8 @@ sub minify {
 
     my $varmap = _shorten_vars($doc) if $opts->{shorten_vars};
 
+    _escape_newlines($doc) if $opts->{escape_newlines};
+
     my $result = $doc->serialize;
 
     # Post-process: replace variables in interpolated strings/regexes
@@ -152,6 +154,8 @@ sub minify_sub {
 
     my $varmap = _shorten_vars($new_doc) if $opts->{shorten_vars};
 
+    _escape_newlines($new_doc) if $opts->{escape_newlines};
+
     my $result = $new_doc->serialize;
 
     # Post-process: replace variables in interpolated strings/regexes
@@ -180,6 +184,7 @@ sub _resolve_opts {
         wrap             => 0,
         optimize         => 0,
         keep_name        => 1,
+        escape_newlines  => 1,
     );
 
     my %out = %defaults;
@@ -728,6 +733,109 @@ sub _optimize_constant_folding {
 }
 
 ##############################################################################
+# Escape literal LF/TAB/CR inside string literals as \n \t \r.
+#
+# Double-quoted and qq strings: literal control chars in the raw body are
+# replaced in place. "\<LF>" becomes "\n" (the backslash must not be doubled).
+# Single-quoted and q() strings: decoded, and if the value contains a control
+# char, re-emitted as a double-quoted string with "\\", '"', '$', '@' escaped.
+#
+# Token class is left unchanged on purpose: _replace_vars_in_interpolations
+# matches by class, and must not rename variables inside the escaped text.
+
+my %CTRL_ESCAPE = ("\n" => '\n', "\t" => '\t', "\r" => '\r');
+
+sub _escape_newlines {
+    my ($doc) = @_;
+
+    for my $tok (@{ _find($doc, 'PPI::Token::Quote::Single') },
+                 @{ _find($doc, 'PPI::Token::Quote::Literal') }) {
+        _escape_single_token($tok);
+    }
+    for my $tok (@{ _find($doc, 'PPI::Token::Quote::Double') },
+                 @{ _find($doc, 'PPI::Token::Quote::Interpolate') }) {
+        _escape_double_token($tok);
+    }
+}
+
+# Returns (prefix, open, body, close) where body is the raw text between the
+# delimiters (as PPI's ->string reports it), or an empty list if unparseable.
+sub _split_quote {
+    my ($tok) = @_;
+    my $content = $tok->content;
+    my $body    = $tok->string;
+    return () unless defined $body;
+
+    # Layout: prefix . open . body . close, with single-char delimiters.
+    my $body_pos = length($content) - 1 - length($body);
+    return () if $body_pos < 1;
+    return () unless substr($content, $body_pos, length $body) eq $body;
+
+    my $head   = substr($content, 0, $body_pos);    # prefix + open delimiter
+    my $open   = substr($head, -1);
+    my $prefix = substr($head, 0, -1);
+    my $close  = substr($content, -1);
+    return ($prefix, $open, $body, $close);
+}
+
+sub _escape_single_token {
+    my ($tok) = @_;
+    my ($prefix, $open, $body, $close) = _split_quote($tok);
+    return unless defined $body;
+
+    # Decode: only \\ and an escaped delimiter are escapes in single quotes.
+    my $val = '';
+    my $len = length $body;
+    for (my $i = 0; $i < $len; ) {
+        my $c = substr($body, $i, 1);
+        if ($c eq '\\' && $i + 1 < $len) {
+            my $n = substr($body, $i + 1, 1);
+            if ($n eq '\\' || $n eq $open || $n eq $close) {
+                $val .= $n;
+                $i += 2;
+                next;
+            }
+        }
+        $val .= $c;
+        $i++;
+    }
+
+    return unless $val =~ /[\n\t\r]/;
+
+    (my $enc = $val) =~ s/([\\"\$\@])/\\$1/g;
+    $enc =~ s/([\n\t\r])/$CTRL_ESCAPE{$1}/g;
+    $tok->{content} = qq{"$enc"};
+}
+
+sub _escape_double_token {
+    my ($tok) = @_;
+    my ($prefix, $open, $body, $close) = _split_quote($tok);
+    return unless defined $body;
+    return unless $body =~ /[\n\t\r]/;
+
+    # A control char inside an interpolated expression ("@{[ ... ]}",
+    # "${ ... }", "$h{...}", "$a[...]", "->{...}") is Perl code, and "\n" there
+    # is a syntax error. Leave such strings alone.
+    return if $body =~ /[\$\@]\{|[\$\@][\w:]+[\[\{]|->[\[\{]/;
+
+    my $out = '';
+    my $len = length $body;
+    for (my $i = 0; $i < $len; ) {
+        my $c = substr($body, $i, 1);
+        if ($c eq '\\' && $i + 1 < $len) {
+            my $n = substr($body, $i + 1, 1);
+            $out .= exists $CTRL_ESCAPE{$n} ? $CTRL_ESCAPE{$n} : "$c$n";
+            $i += 2;
+            next;
+        }
+        $out .= exists $CTRL_ESCAPE{$c} ? $CTRL_ESCAPE{$c} : $c;
+        $i++;
+    }
+
+    $tok->{content} = $prefix . $open . $out . $close;
+}
+
+##############################################################################
 # Word wrap (string/regex aware)
 
 sub _wrap {
@@ -1255,6 +1363,7 @@ and unknown keys are ignored. Defaults:
      shorten_vars      0   rename lexicals to short names ($c, $d, ...)
     wrap              0   if >0, word-wrap output to <=N columns
     keep_name         1   preserve the sub name in C<minify_sub> output
+    escape_newlines   1   write LF/TAB/CR in strings as C<\n \t \r> escapes
      optimize          0   EXPERIMENTAL: fold simple Number +/-/* chains
                            (e.g. C<2 + 3 + 4> becomes C<9>)
 

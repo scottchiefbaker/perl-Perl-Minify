@@ -5,7 +5,7 @@ use warnings;
 use v5.16;
 
 use PPI::Document ();
-use Scalar::Util  qw/blessed weaken/;
+use Scalar::Util  qw/weaken/;
 
 use Exporter 'import';
 our @EXPORT    = ();

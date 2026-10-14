@@ -4,12 +4,13 @@ use strict;
 use warnings;
 use Test::More;
 use File::Temp qw/tempfile/;
+use FindBin qw/$Bin/;
 use Perl::Minify qw(minify minify_sub);
 
-# Read the color.pl fixture
+# Read the color.pl fixture (located relative to this test file, not the CWD)
 my $fixture = do {
     local $/;
-    open my $fh, '<', 'color.pl' or die "Cannot open color.pl: $!";
+    open my $fh, '<', "$Bin/../color.pl" or die "Cannot open color.pl: $!";
     <$fh>;
 };
 
@@ -28,7 +29,7 @@ sub compile_minified {
     print $fh $min;
     close $fh;
 
-    my $output = `perl -c $tmp 2>&1`;
+    my $output = `"$^X" -c "$tmp" 2>&1`;
     ok($? == 0, 'perl -c exits 0 on full-file minify')
         or diag "output: $output";
     like($output, qr/syntax OK/, 'full-file minify produces valid syntax')
@@ -44,7 +45,7 @@ sub compile_minified {
     print $fh compile_minified($sub);
     close $fh;
 
-    my $output = `perl -c $tmp 2>&1`;
+    my $output = `"$^X" -c "$tmp" 2>&1`;
     ok($? == 0, 'perl -c exits 0 on minify_sub color')
         or diag "output: $output";
     like($output, qr/syntax OK/, 'minify_sub color produces valid syntax')
@@ -60,7 +61,7 @@ sub compile_minified {
     print $fh compile_minified($sub);
     close $fh;
 
-    my $output = `perl -c $tmp 2>&1`;
+    my $output = `"$^X" -c "$tmp" 2>&1`;
     ok($? == 0, 'perl -c exits 0 on minify_sub file_get_contents')
         or diag "output: $output";
     like($output, qr/syntax OK/, 'minify_sub file_get_contents produces valid syntax')
@@ -83,7 +84,7 @@ END_PERL
     print $fh $min;
     close $fh;
 
-    my $output = `perl -c $tmp 2>&1`;
+    my $output = `"$^X" -c "$tmp" 2>&1`;
     ok($? == 0, 'perl -c exits 0 on shorten_vars output')
         or diag "output: $output";
     like($output, qr/syntax OK/, 'shorten_vars output produces valid syntax')
@@ -99,7 +100,7 @@ END_PERL
     print $fh $min;
     close $fh;
 
-    my $output = `perl -c $tmp 2>&1`;
+    my $output = `"$^X" -c "$tmp" 2>&1`;
     ok($? == 0, 'perl -c exits 0 on wrap output')
         or diag "output: $output";
     like($output, qr/syntax OK/, 'wrap output produces valid syntax')

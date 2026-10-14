@@ -94,14 +94,7 @@ sub minify {
     _strip_whitespace($doc) if $opts->{strip_whitespace};
     _strip_semicolons($doc) if $opts->{strip_semicolons};
 
-    # Apply optimizations if requested (EXPERIMENTAL - may be buggy)
-    if ($opts->{optimize}) {
-        eval {
-            _optimize_constant_folding($doc);
-            _optimize_dead_code($doc);
-        };
-        # Ignore optimization errors - they're experimental
-    }
+    _optimize_constant_folding($doc) if $opts->{optimize};
 
     my $varmap = _shorten_vars($doc) if $opts->{shorten_vars};
 
@@ -155,14 +148,7 @@ sub minify_sub {
     _strip_whitespace($new_doc) if $opts->{strip_whitespace};
     _strip_semicolons($new_doc) if $opts->{strip_semicolons};
 
-    # Apply optimizations if requested (EXPERIMENTAL - may be buggy)
-    if ($opts->{optimize}) {
-        eval {
-            _optimize_constant_folding($new_doc);
-            _optimize_dead_code($new_doc);
-        };
-        # Ignore optimization errors - they're experimental
-    }
+    _optimize_constant_folding($new_doc) if $opts->{optimize};
 
     my $varmap = _shorten_vars($new_doc) if $opts->{shorten_vars};
 
@@ -741,39 +727,6 @@ sub _optimize_constant_folding {
     }
 }
 
-sub _optimize_dead_code {
-    my ($doc) = @_;
-
-    # Find unreachable code after return/die/exit statements
-    my $statements = _find($doc, 'PPI::Statement');
-
-    my $found_terminator = 0;
-    my @to_delete;
-
-    for my $stmt (@$statements) {
-        if ($found_terminator) {
-            # This statement is after a terminator - it's dead code
-            # But stop if we hit a new sub or block
-            last if $stmt->isa('PPI::Statement::Sub');
-            push @to_delete, $stmt;
-            next;
-        }
-
-        # Check if this statement contains return/die/exit
-        my $tokens = $stmt->tokens;
-        for my $tok (@$tokens) {
-            if ($tok->isa('PPI::Token::Word') &&
-                $tok->content =~ /^(return|die|exit|croak|confess)$/) {
-                $found_terminator = 1;
-                last;
-            }
-        }
-    }
-
-    # Delete dead statements
-    $_->delete for @to_delete;
-}
-
 ##############################################################################
 # Word wrap (string/regex aware)
 
@@ -1245,9 +1198,8 @@ ignored silently. Defaults:
      shorten_vars      0   rename lexicals to short names ($c, $d, ...)
     wrap              0   if >0, word-wrap output to <=N columns
     keep_name         1   preserve the sub name in C<minify_sub> output
-    optimize          0   EXPERIMENTAL: fold Number/Op/Number arithmetic
-                          chains in place, and remove statements after a
-                          terminator (return/die/exit/...) when detected
+     optimize          0   EXPERIMENTAL: fold simple Number +/-/* chains
+                           (e.g. C<2 + 3 + 4> becomes C<9>)
 
 =head2 C<shorten_vars> limitations
 

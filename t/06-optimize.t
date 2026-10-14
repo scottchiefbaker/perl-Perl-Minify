@@ -5,43 +5,33 @@ use warnings;
 use Test::More;
 use Perl::Minify qw(minify);
 
-# Test experimental optimization features
+# Constant folding (optimize => 1). Compare exact output so that a
+# regression which silently stops folding, or folds incorrectly, fails.
 
-# 1. Constant folding - basic arithmetic
-my $r1 = minify('my $x = 2 + 3;', { optimize => 1 });
-ok(defined($r1), 'constant folding returns defined');
-# The optimization may or may not trigger, so we just check it doesn't break
-like($r1, qr/my\$x=/, 'basic structure preserved') or diag "got: $r1";
+my @cases = (
+    # [ input,                 expected (optimize on),   description ]
+    [ 'my $x = 2 + 3;',        'my$x=5;',                 'simple addition folds' ],
+    [ 'my $x = 2 + 3 + 4;',    'my$x=9;',                 'chain 2+3+4 folds to 9' ],
+    [ 'my $x = 6 * 7;',        'my$x=42;',                'multiplication folds' ],
+    [ 'my $x = 2 - 3 * 4;',    'my$x=-10;',               '2-3*4 folds in precedence order' ],
+    [ 'my $x = 1 + 2 * 3 + 4;', 'my$x=11;',               '1+2*3+4 folds to 11' ],
+    [ 'my $x = 2**3 + 4;',     'my$x=2**3+4;',            '**-adjacent +/- left unfolded' ],
+);
 
-# 2. Dead code elimination - code after return
-my $r2 = minify('sub f { return 1; my $dead = 2; }', { optimize => 1 });
-ok(defined($r2), 'dead code elimination returns defined');
-# Check that the sub still works
-like($r2, qr/sub f/, 'sub preserved') or diag "got: $r2";
+for my $c (@cases) {
+    my ($in, $want, $desc) = @$c;
+    is(minify($in, { optimize => 1 }), $want, "optimize: $desc");
+}
 
-# 3. Optimization doesn't break normal code
-my $r3 = minify('my $x = 1; my $y = 2; print $x + $y;', { optimize => 1 });
-ok(defined($r3), 'optimization with normal code works');
-like($r3, qr/print/, 'print statement preserved') or diag "got: $r3";
+# Default is off: no folding.
+is(minify('my $x = 2 + 3;'), 'my$x=2+3;', 'no folding without optimize');
 
-# 4. Optimization can be disabled (default)
-my $r4 = minify('my $x = 2 + 3;');
-ok(defined($r4), 'default (no optimize) works');
-like($r4, qr/2\+3/, 'expression not optimized by default') or diag "got: $r4";
+# Non-constant code is passed through unchanged by the optimizer.
+my $r = minify('my $x = 1; my $y = 2; print $x + $y;', { optimize => 1 });
+like($r, qr/print\$x\+\$y/, 'non-constant expression untouched') or diag "got: $r";
 
-
-# 5. Constant folding chains (folds down fully)
-my $r5 = minify('my $x = 2 + 3 + 4;', { optimize => 1 });
-ok(defined($r5), 'chain fold returns defined');
-like($r5, qr/=9;/, 'chain 2+3+4 folds to 9') or diag "got: $r5";
-
-# 6. Precedence guard: +/- next to * is folded in the correct order
-my $r6 = minify('my $x = 2 - 3 * 4;', { optimize => 1 });
-ok(defined($r6), 'precedence case returns defined');
-like($r6, qr/=-10;/, '2-3*4 folds to -10 (guard respected)') or diag "got: $r6";
-
-# 7. Precedence guard: +/- next to ** untouched entirely
-my $r7 = minify('my $x = 2**3 + 4;', { optimize => 1 });
-like($r7, qr/2\*\*3\+4;/, '2**3+4 left unfolded') or diag "got: $r7";
+# Code after return is kept (dead-code removal is not implemented).
+$r = minify('sub f { return 1; my $dead = 2; }', { optimize => 1 });
+like($r, qr/my\$dead=2/, 'statements after return are preserved') or diag "got: $r";
 
 done_testing;

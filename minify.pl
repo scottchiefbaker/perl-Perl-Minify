@@ -3,13 +3,15 @@
 use strict;
 use warnings;
 use v5.16;
-use Perl::Minify qw(minify);
+use Perl::Minify qw(minify minify_sub minify_error);
 use Getopt::Long;
 
 my $width = 0;
+my $sub_name;
 GetOptions(
 	'width=i' => \$width,
-);
+	'sub=s'   => \$sub_name,
+) or die(usage());
 
 ###############################################################################
 ###############################################################################
@@ -23,9 +25,18 @@ if (!-r $source_file) {
 
 my $source = file_get_contents($source_file);
 
-# Minify the file
+# Minify the file (or just one sub, if --sub was given)
 my $opts = { shorten_vars => 1, wrap => $width };
-my $min  = minify($source, $opts);
+my $min;
+if (defined $sub_name) {
+	$min = minify_sub($source, $sub_name, $opts);
+	if (!defined $min) {
+		print STDERR minify_error(), "\n";
+		exit 1;
+	}
+} else {
+	$min = minify($source, $opts);
+}
 
 print $min;
 
@@ -33,7 +44,7 @@ print $min;
 ###############################################################################
 
 sub usage {
-	my $ret = "Usage: $0 script.pl [--width 80]\n";
+	my $ret = "Usage: $0 script.pl [--width 80] [--sub NAME]\n";
 
 	return $ret;
 }

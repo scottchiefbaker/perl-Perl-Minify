@@ -1220,8 +1220,12 @@ explicitly or via C<:all>.
 =head2 minify_sub($code, $sub_name, \%opts?)
 
 Locates a named subroutine, and runs the minification pipeline on it
-alone. Returns C<undef> on parse failure or if no sub named C<$sub_name>
-is found.
+alone. Returns the sub as bare source text (no surrounding C<use>
+header or file-scope code), or C<undef> on parse failure or if no sub
+named C<$sub_name> is found. The sub keeps its name by default; pass
+C<keep_name =E<gt> 0> to emit an anonymous C<sub { ... }> instead.
+A bare sub that depends on file-scope lexicals or C<state> variables
+will not compile on its own.
 
 =head2 minify_error()
 
@@ -1271,6 +1275,9 @@ shortening and accepts an optional line-width for word wrapping.
     # Minify and wrap output to 80 columns
     perl minify.pl script.pl --width 80
 
+    # Emit only one named sub (bare, name kept)
+    perl minify.pl script.pl --sub color
+
     # Redirect to a file
     perl minify.pl script.pl --width 80 > script.min.pl
 
@@ -1288,10 +1295,17 @@ usage message if the file is missing or unreadable.
 If given, word-wraps the minified output to at most C<N> columns. Omit it to
 emit a single, unwrapped line.
 
+=item C<--sub NAME>
+
+If given, only the subroutine named C<NAME> is minified and printed, as a
+bare sub with its name kept. Exits 1 with the error on STDERR if no such sub
+exists.
+
 =back
 
 The script never overwrites the input; capture its STDOUT to save the result.
-Internally it calls C<minify> with C<{ shorten_vars =E<gt> 1, wrap =E<gt> $width }>.
+Internally it calls C<minify> with C<{ shorten_vars =E<gt> 1, wrap =E<gt> $width }>,
+or C<minify_sub> with the same options when C<--sub> is given.
 
 =head1 AUTHOR
 

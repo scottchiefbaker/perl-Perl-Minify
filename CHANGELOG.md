@@ -1,5 +1,12 @@
 # CHANGELOG
 
+## 0.4.0
+
+- First production release (even minor version).
+- Rework POD and README to put `minify.pl` first as the primary interface, with the module API documented after it.
+- README: document `minify.pl --sub NAME` and add installation instructions.
+- Add Versioning rules to AGENTS.md.
+
 ## 0.03
 
 - Add `shorten_vars` option to rename lexical variables to short names.

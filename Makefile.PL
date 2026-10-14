@@ -1,4 +1,4 @@
-use v5.8.5;
+use 5.016;
 use ExtUtils::MakeMaker;
 
 my %opts = (
@@ -10,7 +10,9 @@ my %opts = (
 	MIN_PERL_VERSION   => '5.016',
 	EXE_FILES          => [ 'minify.pl' ],
 	PREREQ_PM          => {
-		'PPI' => '0',
+		'PPI'            => '0',
+		'Getopt::Long'   => '0',
+		'Scalar::Util'   => '0',
 	},
 	TEST_REQUIRES => {
 		'Test::More' => '0',

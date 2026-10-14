@@ -1361,9 +1361,9 @@ and unknown keys are ignored. Defaults:
      strip_whitespace  1   collapse non-significant whitespace
      strip_semicolons  1   remove safe terminators before C<}> block delimiters
      shorten_vars      0   rename lexicals to short names ($c, $d, ...)
-    wrap              0   if >0, word-wrap output to <=N columns
-    keep_name         1   preserve the sub name in C<minify_sub> output
-    escape_newlines   1   write LF/TAB/CR in strings as C<\n \t \r> escapes
+     wrap              0   if >0, word-wrap output to <=N columns
+     keep_name         1   preserve the sub name in C<minify_sub> output
+     escape_newlines   1   write LF/TAB/CR in strings as C<\n \t \r> escapes
      optimize          0   EXPERIMENTAL: fold simple Number +/-/* chains
                            (e.g. C<2 + 3 + 4> becomes C<9>)
 

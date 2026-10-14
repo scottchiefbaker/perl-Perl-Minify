@@ -5,6 +5,7 @@ LICENSE
 Makefile.PL
 MANIFEST
 minify.pl
+color.pl
 README.md
 t/00-basic.t
 t/01-edge.t

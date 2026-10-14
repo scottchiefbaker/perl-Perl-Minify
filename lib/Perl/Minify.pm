@@ -12,7 +12,7 @@ our @EXPORT    = ();
 our @EXPORT_OK = qw(minify minify_sub minify_error);
 our %EXPORT_TAGS = (all => [qw(minify minify_sub minify_error)]);
 
-our $VERSION = '0.4.0';
+our $VERSION = '0.4.1';
 
 # Error reporting
 our $ERROR = '';

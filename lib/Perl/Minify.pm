@@ -2,7 +2,7 @@ package Perl::Minify;
 
 use strict;
 use warnings;
-use v5.16;
+use v5.22;
 
 use PPI::Document ();
 use Scalar::Util  qw/weaken/;
@@ -12,7 +12,7 @@ our @EXPORT    = ();
 our @EXPORT_OK = qw(minify minify_sub minify_error);
 our %EXPORT_TAGS = (all => [qw(minify minify_sub minify_error)]);
 
-our $VERSION = '0.4.1';
+our $VERSION = '0.4.3';
 
 # Error reporting
 our $ERROR = '';
@@ -1390,7 +1390,7 @@ This never breaks a string literal mid-character.
     make test
     make install
 
-Requires Perl v5.16 or later, and the CPAN module C<PPI> (C<cpan PPI>).
+Requires Perl v5.22 or later, and the CPAN module C<PPI> (C<cpan PPI>).
 
 =head1 AUTHOR
 

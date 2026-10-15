@@ -17,7 +17,7 @@ my $fixture = do {
 # Helper: wrap minified sub in a small script so perl -c works with state/features
 sub compile_minified {
     my ($code) = @_;
-    return "use v5.16;\n$code\n__END__\n";
+    return "use v5.22;\n$code\n__END__\n";
 }
 
 # 1. Full-file minify -> perl -c must say "syntax OK"
@@ -36,7 +36,7 @@ sub compile_minified {
         or diag "output: $output";
 }
 
-# 2. minify_sub on 'color' -> perl -c must say "syntax OK" (wrapped with use v5.16)
+# 2. minify_sub on 'color' -> perl -c must say "syntax OK" (wrapped with use v5.22)
 {
     my $sub = minify_sub($fixture, 'color');
     ok(defined($sub), 'minify_sub color returns defined');
@@ -72,7 +72,7 @@ sub compile_minified {
 {
     # Use a simpler fixture without state vars used inside regex
     my $simple = <<'END_PERL';
-use v5.16;
+use v5.22;
 my $x = 1;
 my $y = $x + 1;
 print $y;

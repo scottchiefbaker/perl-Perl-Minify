@@ -22,7 +22,7 @@ make test
 make install
 ```
 
-Requires Perl v5.16 or later and the CPAN module `PPI` (`cpan PPI`).
+Requires Perl v5.22 or later and the CPAN module `PPI` (`cpan PPI`).
 
 ## Command Line Usage
 

@@ -2,7 +2,7 @@
 
 use strict;
 use warnings;
-use v5.16;
+use v5.22;
 use Perl::Minify qw(minify minify_sub minify_error);
 use Getopt::Long;
 

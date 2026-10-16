@@ -1,9 +1,5 @@
 # CHANGELOG
 
-## 0.4.3
-
-- Raise the minimum required Perl from v5.16 to v5.22.
-
 ## 0.4.0
 
 - First production release (even minor version).

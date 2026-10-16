@@ -21,8 +21,8 @@ sub color {
 	if (!length($str) || $str eq 'reset') { return "\e[0m";    } # No string = RESET
 
 	# Some predefined colors/commands
-	state %color_map = qw(red 160 blue 27 green 34 yellow 226 orange 214 purple 93 white 15 black 0);
-	state %cmd_map   = qw(bold 1 italic 3 underline 4 blink 5 inverse 7);
+	my %color_map = qw(red 160 blue 27 green 34 yellow 226 orange 214 purple 93 white 15 black 0);
+	my %cmd_map   = qw(bold 1 italic 3 underline 4 blink 5 inverse 7);
 
 	# Pre-process the string
 	$str =~ s/on_/-/g;                             # "on_" becomes a negative number
